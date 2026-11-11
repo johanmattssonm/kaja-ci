@@ -61,7 +61,7 @@ async fn handle_message(
 }
 
 async fn start_build(session: &mut Session, stdin_tx: Arc<Mutex<Option<mpsc::Sender<String>>>>) {
-    let _ = session.text("Running\r\n".to_string()).await;
+    let _ = session.text("status: RUNNING".to_string()).await;
 
     let pty_system = native_pty_system();
 
@@ -73,6 +73,7 @@ async fn start_build(session: &mut Session, stdin_tx: Arc<Mutex<Option<mpsc::Sen
     }) {
         Ok(pair) => pair,
         Err(err) => {
+            let _ = session.text("status: FAILED".to_string()).await;
             let _ = session
                 .text(format!("failed to allocate PTY in {BUILD_DIR}: {err}"))
                 .await;
@@ -80,13 +81,14 @@ async fn start_build(session: &mut Session, stdin_tx: Arc<Mutex<Option<mpsc::Sen
         }
     };
 
-    let mut cmd = CommandBuilder::new("git");
-    cmd.arg("pull");
+    let mut cmd = CommandBuilder::new("/home/johan/Downloads/resting-chair/test.sh");
+    //cmd.arg("pull");
     cmd.cwd(BUILD_DIR);
 
     let mut child = match pty_pair.slave.spawn_command(cmd) {
         Ok(child) => child,
         Err(err) => {
+            let _ = session.text("status: FAILED".to_string()).await;
             let _ = session
                 .text(format!(
                     "failed to start build command in {BUILD_DIR}: {err}"
@@ -101,6 +103,7 @@ async fn start_build(session: &mut Session, stdin_tx: Arc<Mutex<Option<mpsc::Sen
     let reader = match pty_pair.master.try_clone_reader() {
         Ok(reader) => reader,
         Err(err) => {
+            let _ = session.text("status: FAILED".to_string()).await;
             let _ = session
                 .text(format!("failed to open PTY reader: {err}"))
                 .await;
@@ -111,6 +114,7 @@ async fn start_build(session: &mut Session, stdin_tx: Arc<Mutex<Option<mpsc::Sen
     let mut writer = match pty_pair.master.take_writer() {
         Ok(writer) => writer,
         Err(err) => {
+            let _ = session.text("status: FAILED".to_string()).await;
             let _ = session
                 .text(format!("failed to open PTY writer: {err}"))
                 .await;
@@ -143,6 +147,7 @@ async fn start_build(session: &mut Session, stdin_tx: Arc<Mutex<Option<mpsc::Sen
                 }
 
                 Err(err) => {
+                    let _ = tx.blocking_send("status: FAILED".to_string());
                     let _ = tx.blocking_send(format!("\r\nPTY read error: {err}\r\n"));
                     break;
                 }
@@ -186,13 +191,18 @@ async fn start_build(session: &mut Session, stdin_tx: Arc<Mutex<Option<mpsc::Sen
     println!("Task ended: {:?}", status);
 
     if let Ok(status) = status {
+        let exit_code = status.exit_code();
         let _ = session
-            .text(format!(
-                "Task finished, exit code: {:?}",
-                status.exit_code()
-            ))
+            .text(format!("Task finished, exit code: {:?}", exit_code))
             .await;
+
+        if exit_code == 0 {
+            let _ = session.text("status: SUCCESS".to_string()).await;
+        } else {
+            let _ = session.text("status: FAILED".to_string()).await;
+        }
     } else {
+        let _ = session.text("status: FAILED".to_string()).await;
         let _ = session.text("Error".to_string()).await;
     }
 
@@ -226,7 +236,7 @@ async fn build() -> impl Responder {
             </head>
 
             <body>
-                <h1>Task Output</h1>
+                <h1 id="task-status">Loading</h1>
                 <build-component></build-component>
             </body>
         </html>

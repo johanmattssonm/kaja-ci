@@ -82,7 +82,7 @@ async fn connect_build_view(id: String) {
     while let Some(message) = ws_read.next().await {
         match message {
             Ok(Message::Text(text)) => {
-                append_build_output(&format!("{}-output", id), text);
+                process_build_output(&format!("{}-output", id), text);
             }
             Ok(Message::Bytes(_)) => {
                 log!("Expecting string got binary data.");
@@ -138,10 +138,10 @@ fn setup_stdin_handler(id: &str, input_tx: mpsc::UnboundedSender<String>) {
         return;
     }
 
-    keydown.forget();
+    keydown.forget(); // this is ok because the input is around until user leaves this page
 }
 
-fn append_build_output(id: &str, chunk: String) {
+fn process_build_output(id: &str, chunk: String) {
     let element = match get_element_by_id(id) {
         Some(element) => element,
         None => {
@@ -150,10 +150,32 @@ fn append_build_output(id: &str, chunk: String) {
         }
     };
 
+    if chunk.starts_with("status: ") {
+        handle_status(&chunk);
+        return;
+    }
+
     let plain_chunk = drop_pipe_name(chunk);
     let existing = element.text_content().unwrap_or_default();
     element.set_text_content(Some(&(existing + &plain_chunk)));
     element.set_scroll_top(element.scroll_height());
+}
+
+fn handle_status(line: &str) {
+    match line {
+        "status: RUNNING" => {
+            try_inner_text("#task-status", "Task: Running");
+        }
+        "status: FAILED" => {
+            try_inner_text("#task-status", "Task: Failed");
+        }
+        "status: SUCCESS" => {
+            try_inner_text("#task-status", "Task Finished Succesfully");
+        }
+        _ => {
+            log!("Unknown status from runner:", line);
+        }
+    }
 }
 
 fn drop_pipe_name(line: String) -> String {
@@ -162,6 +184,9 @@ fn drop_pipe_name(line: String) -> String {
         return sub.to_string();
     } else if line.starts_with("stdout: ") {
         let sub = &line["stdout: ".len()..line.len()];
+        return sub.to_string();
+    } else if line.starts_with("status: ") {
+        let sub = &line["status: ".len()..line.len()];
         return sub.to_string();
     }
 
