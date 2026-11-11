@@ -4,11 +4,18 @@ use actix_web::{App, Error, HttpRequest, HttpResponse, HttpServer, Responder, we
 use actix_ws::{Message, Session, handle};
 use kaja_html_macro::html;
 use portable_pty::{CommandBuilder, PtySize, native_pty_system};
+use serde::Deserialize;
 use std::io::{Read, Write};
+use std::path::{self, PathBuf};
 use std::sync::Arc;
 use tokio::sync::{Mutex, mpsc};
 
 const BUILD_DIR: &str = "/home/johan/Downloads/resting-chair";
+
+#[derive(Deserialize)]
+struct ProjectGetParams {
+    project: String,
+}
 
 async fn websocket(req: HttpRequest, body: web::Payload) -> Result<actix_web::HttpResponse, Error> {
     let (response, session, mut msg_stream) = handle(&req, body)?;
@@ -24,6 +31,48 @@ async fn websocket(req: HttpRequest, body: web::Payload) -> Result<actix_web::Ht
     Ok(response)
 }
 
+struct Action {
+    command: String,
+    payload: String,
+}
+
+fn parse_action(line: String) -> Option<Action> {
+    if !line.starts_with("ACTION ") {
+        println!("Not an action.");
+        return None;
+    }
+
+    let line = &line["ACTION ".len()..line.len()];
+    let sepatator = line.find(" ");
+
+    if sepatator.is_none() {
+        println!("No separator after action.");
+        return None;
+    }
+
+    let separator = sepatator.unwrap();
+
+    Some(Action {
+        command: line[0..sepatator.unwrap()].to_string(),
+        payload: line[separator + 1..line.len()].to_string(),
+    })
+}
+
+impl Action {
+    fn folder_exists(&self) -> bool {
+        let path = PathBuf::from(&self.payload);
+
+        if !path.is_dir() {
+            return false;
+        }
+
+        match std::fs::metadata(&path) {
+            Ok(metadata) => !metadata.permissions().readonly(),
+            Err(_) => false,
+        }
+    }
+}
+
 async fn handle_message(
     msg: Message,
     session: &mut Session,
@@ -33,23 +82,57 @@ async fn handle_message(
         Message::Text(text) => {
             let text = text.to_string();
 
-            if text == "BUILD" {
+            if text.starts_with("ACTION ") {
                 if stdin_tx.lock().await.is_some() {
-                    let _ = session.text("Build already running".to_string()).await;
+                    let _ = session
+                        .text("Console is already attached.".to_string())
+                        .await;
                     return;
                 }
 
+                let action = parse_action(text);
+
+                if action.is_none() {
+                    println!("Malformed action");
+                    return;
+                }
+
+                if action.as_ref().map_or(true, |a| !a.folder_exists()) {
+                    println!("Project folder does not exist or is not writable.");
+
+                    let _ = session
+                        .text("stdout: Can't find writable project folder.".to_string())
+                        .await;
+
+                    let _ = session.text("status: FAILED".to_string()).await;
+                    return;
+                }
+
+                let action = action.unwrap();
                 let mut build_session = session.clone();
                 let build_stdin_tx = stdin_tx.clone();
+
                 actix_web::rt::spawn(async move {
-                    start_build(&mut build_session, build_stdin_tx).await;
+                    start_build(&mut build_session, build_stdin_tx, action).await;
                 });
                 return;
-            }
+            } else if text.starts_with("STDIN ") {
+                let input = &text["STDIN ".len()..text.len()];
+                let build_stdin_tx = stdin_tx.clone();
+                let tx = build_stdin_tx.lock().await.clone();
 
-            let tx = stdin_tx.lock().await.clone();
-            if let Some(tx) = tx {
-                let _ = tx.send(text).await;
+                if let Some(tx) = tx {
+                    let _ = tx.try_send(input.to_string());
+                }
+
+                return;
+            } else {
+                let tx = stdin_tx.lock().await.clone();
+                if let Some(tx) = tx {
+                    let _ = tx.send(text).await;
+                } else {
+                    println!("Not an action: {}", text);
+                }
             }
         }
         Message::Close(_) => {
@@ -60,7 +143,32 @@ async fn handle_message(
     }
 }
 
-async fn start_build(session: &mut Session, stdin_tx: Arc<Mutex<Option<mpsc::Sender<String>>>>) {
+fn command_to_executable(action: Action) -> Option<CommandBuilder> {
+    match action.command.as_str() {
+        "build" => {
+            let mut cmd = CommandBuilder::new("/home/johan/Downloads/resting-chair/test.sh");
+            cmd.cwd(action.payload);
+            Some(cmd)
+        }
+        "fetch" => {
+            let mut cmd = CommandBuilder::new("git");
+            cmd.arg("fetch");
+            cmd.arg("--all");
+            cmd.cwd(action.payload);
+            Some(cmd)
+        }
+        _ => {
+            println!("Unknown action {}", action.command);
+            None
+        }
+    }
+}
+
+async fn start_build(
+    session: &mut Session,
+    stdin_tx: Arc<Mutex<Option<mpsc::Sender<String>>>>,
+    action: Action,
+) {
     let _ = session.text("status: RUNNING".to_string()).await;
 
     let pty_system = native_pty_system();
@@ -81,9 +189,16 @@ async fn start_build(session: &mut Session, stdin_tx: Arc<Mutex<Option<mpsc::Sen
         }
     };
 
-    let mut cmd = CommandBuilder::new("/home/johan/Downloads/resting-chair/test.sh");
-    //cmd.arg("pull");
-    cmd.cwd(BUILD_DIR);
+    let cmd = command_to_executable(action);
+
+    if cmd.is_none() {
+        println!("No command to execute.");
+        return;
+    }
+
+    let cmd = cmd.unwrap();
+
+    // println!("Executing: {:?}", cmd);
 
     let mut child = match pty_pair.slave.spawn_command(cmd) {
         Ok(child) => child,
@@ -132,7 +247,6 @@ async fn start_build(session: &mut Session, stdin_tx: Arc<Mutex<Option<mpsc::Sen
         loop {
             match reader.read(&mut buf) {
                 Ok(0) => break,
-
                 Ok(n) => {
                     let chunk = String::from_utf8_lossy(&buf[..n]).to_string();
 
@@ -140,12 +254,10 @@ async fn start_build(session: &mut Session, stdin_tx: Arc<Mutex<Option<mpsc::Sen
                         break;
                     }
                 }
-
                 Err(err) if err.raw_os_error() == Some(5) => {
                     // EIO: normal PTY termination on Linux.
                     break;
                 }
-
                 Err(err) => {
                     let _ = tx.blocking_send("status: FAILED".to_string());
                     let _ = tx.blocking_send(format!("\r\nPTY read error: {err}\r\n"));
@@ -212,10 +324,14 @@ async fn start_build(session: &mut Session, stdin_tx: Arc<Mutex<Option<mpsc::Sen
 
 #[actix_web::get("/")]
 async fn index() -> impl Responder {
-    let content = format!(
-        "<main><h1>Projects</h1><p>{}</p><p><a href=\"/build?project={}\">Test</a></p></main>",
-        BUILD_DIR, BUILD_DIR
-    );
+    let content = html! {{
+        <main>
+            <h1>Projects</h1>
+            <p>$BUILD_DIR</p>
+            <p><a href="/build?project=$BUILD_DIR">Test</a></p>
+            <p><a href="/fetch?project=$BUILD_DIR">Git Fetch</a></p>
+        </main>
+    }};
 
     HttpResponse::Ok()
         .content_type(ContentType::html())
@@ -223,7 +339,7 @@ async fn index() -> impl Responder {
 }
 
 #[actix_web::get("/build")]
-async fn build() -> impl Responder {
+async fn build(params: web::Query<ProjectGetParams>) -> impl Responder {
     let content = html! {{
         <!doctype html>
         <html lang="en">
@@ -236,8 +352,33 @@ async fn build() -> impl Responder {
             </head>
 
             <body>
-                <h1 id="task-status">Loading</h1>
-                <build-component></build-component>
+                <h1 id="status">Loading</h1>
+                <console-component project="$(params.project)" action="build"></console-component>
+            </body>
+        </html>
+    }};
+
+    HttpResponse::Ok()
+        .content_type(ContentType::html())
+        .body(content)
+}
+
+#[actix_web::get("/fetch")]
+async fn fetch(params: web::Query<ProjectGetParams>) -> impl Responder {
+    let content = html! {{
+        <!doctype html>
+        <html lang="en">
+            <head>
+                <meta charset="UTF-8" />
+                <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+                <title>CI Git Fetch</title>
+                <script type="module" src="pkg/main.js" defer></script>
+                <link rel="stylesheet" href="pkg/styles.css" />
+            </head>
+
+            <body>
+                <h1 id="status">Updating Project</h1>
+                <console-component project="$(params.project)" action="fetch"></console-component>
             </body>
         </html>
     }};
@@ -258,6 +399,7 @@ async fn main() -> std::io::Result<()> {
             .service(fs::Files::new("/pkg", "../frontend/pkg"))
             .service(index)
             .service(build)
+            .service(fetch)
             .route("/ws", web::get().to(websocket))
     })
     .bind(("127.0.0.1", 2003))?

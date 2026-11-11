@@ -7,17 +7,38 @@ use wasm_bindgen::{JsCast, prelude::Closure};
 use wasm_bindgen_futures::spawn_local;
 use web_sys::HtmlInputElement;
 
-#[component("build-component")]
-struct Build {}
+#[component("console-component")]
+struct Console {
+    #[attribute]
+    project: String,
 
-impl Component for BuildComponent {
+    #[attribute]
+    action: String,
+}
+
+impl Component for ConsoleComponent {
     fn connected(&self) {
         let id = self.get_id();
+        let action: Option<String> = self.get_attribute("action");
+        let project: Option<String> = self.get_attribute("project");
+
         log!("Connected:", &id);
         self.render();
 
+        if action.is_none() {
+            log!("No action for console.");
+            return;
+        }
+
+        if project.is_none() {
+            log!("No project for console.");
+            return;
+        }
+
         spawn_local(async {
-            connect_build_view(id).await;
+            let action = action.unwrap();
+            let project = project.unwrap();
+            connect_console_view(id, action.as_str(), project.as_str()).await;
         });
     }
 
@@ -28,7 +49,7 @@ impl Component for BuildComponent {
     fn attribute_changed(&self, _name: &str, _old_value: &str, _new_value: &str) {}
 }
 
-impl BuildComponent {
+impl ConsoleComponent {
     fn render(&self) {
         let id = self.get_id();
         let element = match get_element_by_id(&id) {
@@ -42,7 +63,10 @@ impl BuildComponent {
         color::clear_render_state(&format!("{}-output", id));
         element.set_inner_html("");
 
+        let project: String = self.get_attribute("project").unwrap_or_default();
+
         let content = html! {{
+            <p>Project Folder: $(project)</p>
             <pre id="$(id)-output"></pre>
             <input id="$(id)-stdin" placeholder="Type input and press Enter">
         }};
@@ -51,18 +75,17 @@ impl BuildComponent {
     }
 }
 
-async fn connect_build_view(id: String) {
-    let ws = match WebSocket::open("ws://127.0.0.1:2003/ws") {
-        Ok(ws) => ws,
-        Err(err) => {
-            log!("failed to open websocket", format!("{err:?}"));
-            return;
-        }
-    };
+async fn connect_console_view(id: String, action: &str, project: &str) {
+    let ws = WebSocket::open("ws://127.0.0.1:2003/ws");
+
+    if ws.is_err() {
+        log!("Failed to open websocket");
+        return;
+    }
 
     log!("Connected websocket");
 
-    let (mut ws_write, mut ws_read) = ws.split();
+    let (mut ws_write, mut ws_read) = ws.unwrap().split();
     let (input_tx, mut input_rx) = mpsc::unbounded::<String>();
 
     spawn_local(async move {
@@ -76,8 +99,10 @@ async fn connect_build_view(id: String) {
 
     setup_stdin_handler(&id, input_tx.clone());
 
-    if let Err(err) = input_tx.unbounded_send("BUILD".to_string()) {
-        log!("failed to enqueue BUILD message", format!("{err:?}"));
+    let project_action = format!("ACTION {} {}", action, project);
+
+    if let Err(err) = input_tx.unbounded_send(project_action) {
+        log!("Failed to enqueue action message", format!("{err:?}"));
         return;
     }
 
@@ -90,7 +115,7 @@ async fn connect_build_view(id: String) {
                 log!("Expecting string got binary data.");
             }
             Err(err) => {
-                log!("websocket receive error", format!("{err:?}"));
+                log!("WebSocket receive error", format!("{err:?}"));
                 return;
             }
         }
@@ -124,7 +149,9 @@ fn setup_stdin_handler(id: &str, input_tx: mpsc::UnboundedSender<String>) {
         event.prevent_default();
 
         let value = keydown_input.value();
-        if keydown_tx.unbounded_send(value).is_err() {
+        let action = format!("STDIN: {}", value);
+
+        if keydown_tx.unbounded_send(action).is_err() {
             log!("WebSocket for stdin channel is closed");
             return;
         }
@@ -166,13 +193,13 @@ fn process_build_output(id: &str, chunk: String) {
 fn handle_status(line: &str) {
     match line {
         "status: RUNNING" => {
-            try_inner_text("#task-status", "Task: Running");
+            try_inner_text("#status", "Task: Running");
         }
         "status: FAILED" => {
-            try_inner_text("#task-status", "Task: Failed");
+            try_inner_text("#status", "Task: Failed");
         }
         "status: SUCCESS" => {
-            try_inner_text("#task-status", "Task Finished Succesfully");
+            try_inner_text("#status", "Task Finished Succesfully");
         }
         _ => {
             log!("Unknown status from runner:", line);
