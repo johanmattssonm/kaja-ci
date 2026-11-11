@@ -1,0 +1,14 @@
+pre {
+    white-space: pre-wrap;
+    font-family: monospace;
+    background: #111;
+    color: #ddd;
+    padding: 12px;
+    min-height: 300px;
+    overflow-y: auto;
+}
+
+input {
+    width: 100%;
+    box-sizing: border-box;
+}
