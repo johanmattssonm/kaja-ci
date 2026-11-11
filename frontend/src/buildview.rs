@@ -35,11 +35,19 @@ impl Component for ConsoleComponent {
             return;
         }
 
+        let component_id = id.clone();
+
         spawn_local(async {
             let action = action.unwrap();
             let project = project.unwrap();
-            connect_console_view(id, action.as_str(), project.as_str()).await;
+            connect_console_view(component_id, action.as_str(), project.as_str()).await;
         });
+
+        if let Some(element) = get_element_by_id(&format!("{}-stdin", &id)) {
+            if let Ok(input) = element.dyn_into::<HtmlInputElement>() {
+                let _ = input.focus();
+            }
+        }
     }
 
     fn disconnected(&self) {
@@ -149,7 +157,7 @@ fn setup_stdin_handler(id: &str, input_tx: mpsc::UnboundedSender<String>) {
         event.prevent_default();
 
         let value = keydown_input.value();
-        let action = format!("STDIN: {}", value);
+        let action = format!("STDIN {}", value);
 
         if keydown_tx.unbounded_send(action).is_err() {
             log!("WebSocket for stdin channel is closed");

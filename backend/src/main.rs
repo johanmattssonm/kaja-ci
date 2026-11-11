@@ -31,6 +31,7 @@ async fn websocket(req: HttpRequest, body: web::Payload) -> Result<actix_web::Ht
     Ok(response)
 }
 
+#[derive(Debug)]
 struct Action {
     command: String,
     payload: String,
@@ -58,19 +59,59 @@ fn parse_action(line: String) -> Option<Action> {
     })
 }
 
-impl Action {
-    fn folder_exists(&self) -> bool {
-        let path = PathBuf::from(&self.payload);
+fn folder_exists(path: &str) -> bool {
+    let path = PathBuf::from(path);
 
-        if !path.is_dir() {
-            return false;
-        }
-
-        match std::fs::metadata(&path) {
-            Ok(metadata) => !metadata.permissions().readonly(),
-            Err(_) => false,
-        }
+    if !path.is_dir() {
+        return false;
     }
+
+    match std::fs::metadata(&path) {
+        Ok(metadata) => !metadata.permissions().readonly(),
+        Err(_) => false,
+    }
+}
+
+async fn process_action(
+    text: String,
+    session: &mut Session,
+    stdin_tx: Arc<Mutex<Option<mpsc::Sender<String>>>>,
+) {
+    if stdin_tx.lock().await.is_some() {
+        let _ = session
+            .text("Console is already attached.".to_string())
+            .await;
+        return;
+    }
+
+    let action = parse_action(text);
+
+    println!("Action: {:?}", action);
+
+    if action.is_none() {
+        println!("Malformed action");
+        return;
+    }
+
+    let action = action.unwrap();
+
+    if !folder_exists(&action.payload) {
+        println!("Project folder does not exist or is not writable.");
+
+        let _ = session
+            .text("stdout: Can't find writable project folder.".to_string())
+            .await;
+
+        let _ = session.text("status: FAILED".to_string()).await;
+        return;
+    }
+
+    let mut build_session = session.clone();
+    let build_stdin_tx = stdin_tx.clone();
+
+    actix_web::rt::spawn(async move {
+        start_build(&mut build_session, build_stdin_tx, action).await;
+    });
 }
 
 async fn handle_message(
@@ -82,40 +123,10 @@ async fn handle_message(
         Message::Text(text) => {
             let text = text.to_string();
 
+            println!("WS: {}", text);
+
             if text.starts_with("ACTION ") {
-                if stdin_tx.lock().await.is_some() {
-                    let _ = session
-                        .text("Console is already attached.".to_string())
-                        .await;
-                    return;
-                }
-
-                let action = parse_action(text);
-
-                if action.is_none() {
-                    println!("Malformed action");
-                    return;
-                }
-
-                if action.as_ref().map_or(true, |a| !a.folder_exists()) {
-                    println!("Project folder does not exist or is not writable.");
-
-                    let _ = session
-                        .text("stdout: Can't find writable project folder.".to_string())
-                        .await;
-
-                    let _ = session.text("status: FAILED".to_string()).await;
-                    return;
-                }
-
-                let action = action.unwrap();
-                let mut build_session = session.clone();
-                let build_stdin_tx = stdin_tx.clone();
-
-                actix_web::rt::spawn(async move {
-                    start_build(&mut build_session, build_stdin_tx, action).await;
-                });
-                return;
+                process_action(text, session, stdin_tx).await;
             } else if text.starts_with("STDIN ") {
                 let input = &text["STDIN ".len()..text.len()];
                 let build_stdin_tx = stdin_tx.clone();
@@ -124,8 +135,6 @@ async fn handle_message(
                 if let Some(tx) = tx {
                     let _ = tx.try_send(input.to_string());
                 }
-
-                return;
             } else {
                 let tx = stdin_tx.lock().await.clone();
                 if let Some(tx) = tx {
