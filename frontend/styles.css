@@ -23,3 +23,13 @@ input {
     border: 1px solid #aaa;
     font-size: 20px;
 }
+
+a,
+a:link,
+a:visited,
+a:hover,
+a:active,
+a:focus,
+a:focus-visible {
+    color: white;
+}

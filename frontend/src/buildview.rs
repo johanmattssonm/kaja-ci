@@ -1,3 +1,4 @@
+use super::color;
 use futures_channel::mpsc;
 use futures_util::{SinkExt, StreamExt};
 use gloo_net::websocket::{Message, futures::WebSocket};
@@ -38,6 +39,7 @@ impl BuildComponent {
             }
         };
 
+        color::clear_render_state(&format!("{}-output", id));
         element.set_inner_html("");
 
         let content = html! {{
@@ -156,8 +158,8 @@ fn process_build_output(id: &str, chunk: String) {
     }
 
     let plain_chunk = drop_pipe_name(chunk);
-    let existing = element.text_content().unwrap_or_default();
-    element.set_text_content(Some(&(existing + &plain_chunk)));
+    let rendered = color::append_ansi_chunk(id, &plain_chunk);
+    element.set_inner_html(&rendered);
     element.set_scroll_top(element.scroll_height());
 }
 

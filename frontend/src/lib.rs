@@ -1,6 +1,7 @@
 use kaja_web::prelude::*;
 
 mod buildview;
+mod color;
 
 #[wasm_bindgen(start)]
 pub fn init() {
