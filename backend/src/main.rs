@@ -61,7 +61,7 @@ async fn handle_message(
 }
 
 async fn start_build(session: &mut Session, stdin_tx: Arc<Mutex<Option<mpsc::Sender<String>>>>) {
-    let _ = session.text("Running".to_string()).await;
+    let _ = session.text("Running\r\n".to_string()).await;
 
     let pty_system = native_pty_system();
 
@@ -219,10 +219,10 @@ async fn build() -> impl Responder {
         <html lang="en">
             <head>
                 <meta charset="UTF-8" />
-                <link rel="stylesheet" href="styles.css" />
                 <meta name="viewport" content="width=device-width, initial-scale=1.0" />
                 <title>CI Build View</title>
                 <script type="module" src="pkg/main.js" defer></script>
+                <link rel="stylesheet" href="pkg/styles.css" />
             </head>
 
             <body>

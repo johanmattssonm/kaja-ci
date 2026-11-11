@@ -2,9 +2,9 @@ use futures_channel::mpsc;
 use futures_util::{SinkExt, StreamExt};
 use gloo_net::websocket::{Message, futures::WebSocket};
 use kaja_web::prelude::*;
-use wasm_bindgen::{JsCast, closure::Closure};
+use wasm_bindgen::{JsCast, prelude::Closure};
 use wasm_bindgen_futures::spawn_local;
-use web_sys::{HtmlInputElement, window};
+use web_sys::HtmlInputElement;
 
 #[component("build-component")]
 struct Build {}
@@ -13,7 +13,6 @@ impl Component for BuildComponent {
     fn connected(&self) {
         let id = self.get_id();
         log!("Connected:", &id);
-
         self.render();
 
         spawn_local(async {
@@ -41,27 +40,12 @@ impl BuildComponent {
 
         element.set_inner_html("");
 
-        let document = window().unwrap().document().unwrap();
+        let content = html! {{
+            <pre id="$(id)-output"></pre>
+            <input id="$(id)-stdin" placeholder="Type input and press Enter">
+        }};
 
-        let output = document.create_element("pre").unwrap();
-        output
-            .set_attribute("id", &format!("{}-output", id))
-            .unwrap();
-        output
-            .set_attribute(
-                "style",
-                "white-space: pre-wrap; font-family: monospace; background: #111; color: #ddd; padding: 12px; min-height: 300px; overflow-y: auto;",
-            )
-            .unwrap();
-        element.append_child(&output).unwrap();
-
-        let input = document.create_element("input").unwrap();
-        input.set_attribute("id", &format!("{}-stdin", id)).unwrap();
-        input
-            .set_attribute("placeholder", "Type response and press Enter")
-            .unwrap();
-        input.set_attribute("autocomplete", "off").unwrap();
-        element.append_child(&input).unwrap();
+        element.set_inner_html(content.as_str());
     }
 }
 
@@ -82,7 +66,7 @@ async fn connect_build_view(id: String) {
     spawn_local(async move {
         while let Some(message) = input_rx.next().await {
             if let Err(err) = ws_write.send(Message::Text(message)).await {
-                log!("failed to send websocket message", format!("{err:?}"));
+                log!("Failed to send websocket message", format!("{err:?}"));
                 break;
             }
         }
@@ -113,22 +97,21 @@ async fn connect_build_view(id: String) {
 
 fn setup_stdin_handler(id: &str, input_tx: mpsc::UnboundedSender<String>) {
     let input_id = format!("{}-stdin", id);
-    let element = match get_element_by_id(&input_id) {
-        Some(element) => element,
-        None => {
-            log!("No stdin input box for build component.");
-            return;
-        }
+    let element = get_element_by_id(&input_id);
+
+    if element.is_none() {
+        log!("No stdin input box for build component.");
+        return;
     };
 
-    let input = match element.dyn_into::<HtmlInputElement>() {
-        Ok(input) => input,
-        Err(_) => {
-            log!("Expected HtmlInputElement for stdin box");
-            return;
-        }
-    };
+    let input = element.unwrap().dyn_into::<HtmlInputElement>();
 
+    if input.is_err() {
+        log!("Expected HtmlInputElement for stdin box");
+        return;
+    }
+
+    let input = input.unwrap();
     let keydown_input = input.clone();
     let keydown_tx = input_tx.clone();
     let keydown = Closure::<dyn FnMut(_)>::new(move |event: web_sys::KeyboardEvent| {
@@ -140,18 +123,18 @@ fn setup_stdin_handler(id: &str, input_tx: mpsc::UnboundedSender<String>) {
 
         let value = keydown_input.value();
         if keydown_tx.unbounded_send(value).is_err() {
-            log!("stdin channel is closed");
+            log!("WebSocket for stdin channel is closed");
             return;
         }
 
         keydown_input.set_value("");
     });
 
-    if input
-        .add_event_listener_with_callback("keydown", keydown.as_ref().unchecked_ref())
-        .is_err()
-    {
-        log!("failed to register stdin keydown handler");
+    let callback_ref = keydown.as_ref().unchecked_ref();
+    let registerd = input.add_event_listener_with_callback("keydown", callback_ref);
+
+    if registerd.is_err() {
+        log!("Failed to register stdin keydown handler");
         return;
     }
 

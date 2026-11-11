@@ -8,5 +8,5 @@ wasm-pack build \
     --out-name kajaci \
     --no-typescript
 
-cp index.html pkg/
 cp main.js pkg/
+cp styles.css pkg/
