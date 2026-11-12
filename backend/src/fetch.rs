@@ -18,7 +18,6 @@ pub async fn fetch(params: web::Query<ProjectGetParams>) -> impl Responder {
             </head>
 
             <body>
-                <h1 id="status">Updating Project</h1>
                 <console-component project="$(params.project)" action="fetch"></console-component>
             </body>
         </html>

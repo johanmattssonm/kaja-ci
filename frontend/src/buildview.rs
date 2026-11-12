@@ -76,6 +76,7 @@ impl ConsoleComponent {
         let project: String = self.get_attribute("project").unwrap_or_default();
 
         let content = html! {{
+            <h1 id="status">Loading</h1>
             <p>Project Folder: $(project)</p>
             <pre id="$(id)-output"></pre>
             <input id="$(id)-stdin" placeholder="Type input and press Enter">

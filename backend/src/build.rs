@@ -18,7 +18,6 @@ pub async fn build(params: web::Query<ProjectGetParams>) -> impl Responder {
             </head>
 
             <body>
-                <h1 id="status">Loading</h1>
                 <console-component project="$(params.project)" action="build"></console-component>
             </body>
         </html>
