@@ -72,18 +72,28 @@ pub async fn index() -> impl Responder {
             .body(content);
     }
 
+    let projects = vec![BUILD_DIR];
+
     let content = html! {{
-        <main>
-            <h1>Projects</h1>
-            <p>$BUILD_DIR</p>
-            <p><a href="/fetch?project=$BUILD_DIR">Git Fetch</a></p>
-            <p><a href="/build?project=$BUILD_DIR">Build</a></p>
-            <p><a href="/test?project=$BUILD_DIR">Test</a></p>
-            <p><a href="/release?project=$BUILD_DIR">Release</a></p>
-            <p><a href="/clean?project=$BUILD_DIR">Clean</a></p>
-            <p><a href="/log?project=$BUILD_DIR">Log</a></p>
-            <p><a href="/settings?project=$BUILD_DIR">Settings</a></p>
-        </main>
+        <html>
+            <head>
+                <title>CI Settings View</title>
+                <script type="module" src="pkg/main.js" defer></script>
+                <link rel="stylesheet" href="pkg/styles.css" />
+            </head>
+            <body>
+                <main>
+                    <h1>Projects</h1>
+                    <rust>
+                        for project in projects {
+                            <markup>
+                                <project-status project="$project"></project-status>
+                            </markup>
+                        }
+                    </rust>
+                </main>
+            </body>
+        </html>
     }};
 
     HttpResponse::Ok()

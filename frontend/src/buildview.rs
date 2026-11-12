@@ -3,7 +3,10 @@ use crate::rest::{Action, ActionResponse};
 use super::color;
 use futures_channel::mpsc;
 use futures_util::{SinkExt, StreamExt};
-use gloo_net::websocket::{Message, futures::WebSocket};
+use gloo_net::{
+    http::Request,
+    websocket::{Message, futures::WebSocket},
+};
 use kaja_web::prelude::*;
 use wasm_bindgen::{JsCast, prelude::Closure};
 use wasm_bindgen_futures::spawn_local;
@@ -83,6 +86,15 @@ impl ConsoleComponent {
         }};
 
         element.set_inner_html(content.as_str());
+    }
+}
+
+#[callback("abort")]
+async fn abort_current_task(project: String) {
+    let endpoint = format!("/abort?project={}", project);
+
+    if Request::get(endpoint.as_str()).send().await.is_err() {
+        try_inner_text("#save-status", "Failed to abort task.");
     }
 }
 

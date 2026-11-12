@@ -2,6 +2,7 @@ use kaja_web::prelude::*;
 
 mod buildview;
 mod color;
+mod projectstatus;
 mod settings;
 
 pub mod rest;

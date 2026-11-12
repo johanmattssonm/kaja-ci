@@ -1,16 +1,20 @@
 use actix_web::{Error, HttpRequest, web};
 use actix_ws::{Message, Session, handle};
-use portable_pty::{CommandBuilder, PtySize, native_pty_system};
+use portable_pty::{Child, CommandBuilder, PtySize, native_pty_system};
 use serde::Deserialize;
 use std::collections::VecDeque;
 use std::io::{Read, Write};
+
 use std::path::PathBuf;
-use std::sync::Arc;
+use std::sync::{Arc, RwLock as StdRwLock};
+use std::thread;
+use std::time::Duration;
 use tokio::sync::{Mutex, mpsc};
 
 #[path = "../../frontend/src/rest.rs"]
 mod rest;
 
+use crate::{APP_DATA, Task};
 use rest::{Action, ActionResponse};
 
 pub const BUILD_DIR: &str = "/home/johan/Downloads/resting-chair";
@@ -198,12 +202,12 @@ async fn process_std_in(action: Action, stdin_state: Arc<Mutex<BuildInputState>>
     }
 }
 
-fn command_to_executable(action: Action) -> Option<CommandBuilder> {
-    let folder = action.folder?;
+fn command_to_executable(action: &Action) -> Option<CommandBuilder> {
+    let folder = action.folder.as_deref()?;
 
     match action.action.as_str() {
         "build" => {
-            let program = match action.command {
+            let program = match action.command.as_deref() {
                 Some(program) => program,
                 None => {
                     println!("Missing command for build action");
@@ -225,6 +229,57 @@ fn command_to_executable(action: Action) -> Option<CommandBuilder> {
         _ => {
             println!("Unknown action {}", action.action);
             None
+        }
+    }
+}
+
+async fn regiter_process(action: &Action, process: Arc<StdRwLock<Box<dyn Child + Send + Sync>>>) {
+    if action.folder.is_none() {
+        println!("No folder for process");
+        return;
+    }
+
+    let folder = action.folder.clone().unwrap();
+
+    APP_DATA.write().await.tasks.insert(
+        folder,
+        Task {
+            running_command: Some(process),
+        },
+    );
+}
+
+async fn unregister_process(action: &Action) {
+    if action.folder.is_none() {
+        println!("No folder for process");
+        return;
+    }
+
+    let folder = action.folder.clone().unwrap();
+
+    APP_DATA.write().await.tasks.insert(
+        folder,
+        Task {
+            running_command: None,
+        },
+    );
+}
+
+fn wait_for_exit(
+    process: Arc<StdRwLock<Box<dyn Child + Send + Sync>>>,
+) -> std::io::Result<portable_pty::ExitStatus> {
+    loop {
+        let status = {
+            let mut child = process
+                .write()
+                .map_err(|_| std::io::Error::other("process lock poisoned"))?;
+            child.try_wait()
+        };
+
+        match status {
+            Ok(Some(status)) => return Ok(status),
+            Ok(None) => thread::sleep(Duration::from_millis(100)),
+            Err(err) => return Err(err),
         }
     }
 }
@@ -251,7 +306,7 @@ async fn start_build(
         }
     };
 
-    let cmd = command_to_executable(action);
+    let cmd = command_to_executable(&action);
 
     if cmd.is_none() {
         println!("No command to execute.");
@@ -262,7 +317,7 @@ async fn start_build(
 
     // println!("Executing: {:?}", cmd);
 
-    let mut child = match pty_pair.slave.spawn_command(cmd) {
+    let child = match pty_pair.slave.spawn_command(cmd) {
         Ok(child) => child,
         Err(err) => {
             send_status(session, "FAILED").await;
@@ -275,6 +330,8 @@ async fn start_build(
         }
     };
 
+    let child = Arc::new(StdRwLock::new(child));
+    regiter_process(&action, child.clone()).await;
     drop(pty_pair.slave);
 
     let reader = match pty_pair.master.try_clone_reader() {
@@ -384,8 +441,10 @@ async fn start_build(
         }
     }
 
-    let status = child.wait();
+    let status = wait_for_exit(child);
     println!("Task ended: {:?}", status);
+
+    unregister_process(&action).await;
 
     if let Ok(status) = status {
         let exit_code = status.exit_code();
