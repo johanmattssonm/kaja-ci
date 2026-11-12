@@ -5,6 +5,7 @@ mod build;
 mod fetch;
 mod index;
 mod runner;
+mod settings;
 
 #[actix_web::main]
 async fn main() -> std::io::Result<()> {
@@ -18,6 +19,8 @@ async fn main() -> std::io::Result<()> {
             .service(index::index)
             .service(build::build)
             .service(fetch::fetch)
+            .service(settings::settings)
+            .service(settings::save_settings)
             .route("/ws", web::get().to(runner::websocket))
     })
     .bind(("127.0.0.1", 2003))?

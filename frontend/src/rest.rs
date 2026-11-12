@@ -14,3 +14,12 @@ pub struct ActionResponse {
     pub status: Option<String>,
     pub stdout: Option<String>,
 }
+
+#[derive(Debug, Default, Serialize, Deserialize)]
+pub struct BuildCommands {
+    pub git: Option<String>,
+    pub build: Option<String>,
+    pub test: Option<String>,
+    pub release: Option<String>,
+    pub clean: Option<String>,
+}

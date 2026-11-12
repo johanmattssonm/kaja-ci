@@ -4,17 +4,13 @@ use std::str::FromStr;
 use actix_web::http::header::ContentType;
 use actix_web::{HttpResponse, Responder};
 use kaja_html_macro::html;
-use serde::{Deserialize, Serialize};
 
 use crate::runner::BUILD_DIR;
 
-#[derive(Debug, Default, Serialize, Deserialize)]
-struct BuildCommands {
-    git: Option<String>,
-    build: Option<String>,
-    test: Option<String>,
-    release: Option<String>,
-}
+#[path = "../../frontend/src/rest.rs"]
+mod rest;
+
+use rest::BuildCommands;
 
 #[actix_web::get("/")]
 pub async fn index() -> impl Responder {
@@ -84,6 +80,9 @@ pub async fn index() -> impl Responder {
             <p><a href="/build?project=$BUILD_DIR">Build</a></p>
             <p><a href="/test?project=$BUILD_DIR">Test</a></p>
             <p><a href="/release?project=$BUILD_DIR">Release</a></p>
+            <p><a href="/clean?project=$BUILD_DIR">Clean</a></p>
+            <p><a href="/log?project=$BUILD_DIR">Log</a></p>
+            <p><a href="/settings?project=$BUILD_DIR">Settings</a></p>
         </main>
     }};
 

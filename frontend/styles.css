@@ -24,6 +24,16 @@ input {
     font-size: 20px;
 }
 
+button {
+    padding: 5px;
+    font-family: monospace;
+    box-sizing: border-box;
+    background: #2f2f2f;
+    color: #ddd;
+    border: 1px solid #aaa;
+    font-size: 20px;
+}
+
 a,
 a:link,
 a:visited,
