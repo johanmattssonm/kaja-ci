@@ -15,6 +15,7 @@ mod index;
 mod release;
 mod runner;
 mod settings;
+mod terminal;
 mod test;
 
 pub struct AppData {
@@ -23,6 +24,7 @@ pub struct AppData {
 
 pub struct Task {
     running_command: Option<Arc<StdRwLock<Box<dyn Child + Send + Sync>>>>,
+    output_lines: Vec<String>,
 }
 
 pub static APP_DATA: LazyLock<RwLock<AppData>> = LazyLock::new(|| {
@@ -50,6 +52,7 @@ async fn main() -> std::io::Result<()> {
             .service(test::test)
             .service(release::release)
             .service(clean::clean)
+            .service(terminal::terminal)
             .route("/ws", web::get().to(runner::websocket))
     })
     .bind(("127.0.0.1", 2003))?

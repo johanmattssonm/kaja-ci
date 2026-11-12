@@ -18,6 +18,8 @@ struct ProjectStatus {
     pub release: String,
     #[attribute]
     pub clean: String,
+    #[attribute]
+    pub terminal: String,
 }
 
 impl Component for ProjectStatusComponent {
@@ -50,12 +52,14 @@ impl Component for ProjectStatusComponent {
             let test = settings.test.unwrap_or_default();
             let release = settings.release.unwrap_or_default();
             let clean = settings.clean.unwrap_or_default();
+            let terminal = settings.terminal.unwrap_or_default();
 
             element.set_attribute("git", git.as_str());
             element.set_attribute("build", build.as_str());
             element.set_attribute("test", test.as_str());
             element.set_attribute("release", release.as_str());
             element.set_attribute("clean", clean.as_str());
+            element.set_attribute("terminal", terminal.as_str());
         });
     }
 
@@ -131,6 +135,16 @@ impl ProjectStatusComponent {
                     if !attr.is_empty() {
                         <markup>
                             <button class="project-action-button" onclick="window.location.href='/clean?project=$project'">Clean</button>
+                        </markup>
+                    }
+                </rust>
+
+                <rust>
+                    let attr: String = self.get_attribute("terminal").unwrap_or_default();
+
+                    if !attr.is_empty() {
+                        <markup>
+                            <button class="project-action-button" onclick="window.location.href='/terminal?project=$project'">Terminal</button>
                         </markup>
                     }
                 </rust>

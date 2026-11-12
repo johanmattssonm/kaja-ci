@@ -22,4 +22,5 @@ pub struct BuildCommands {
     pub test: Option<String>,
     pub release: Option<String>,
     pub clean: Option<String>,
+    pub terminal: Option<String>,
 }

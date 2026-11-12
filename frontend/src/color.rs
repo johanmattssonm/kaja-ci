@@ -2,11 +2,13 @@ use std::{cell::RefCell, collections::HashMap};
 
 #[derive(Default)]
 struct AnsiRenderState {
-    html: String,
     pending_escape: String,
     bold: bool,
     fg_color: Option<&'static str>,
     hyperlink: Option<String>,
+    lines: Vec<String>,
+    current_line: String,
+    carriage_return_pending: bool,
 }
 
 thread_local! {
@@ -28,15 +30,24 @@ pub fn append_ansi_chunk(id: &str, chunk: &str) -> String {
         input.push_str(chunk);
         state.pending_escape.clear();
 
-        let html_chunk = ansi_to_html_streaming(&input, state);
-        state.html.push_str(&html_chunk);
-        state.html.clone()
+        ansi_to_html_streaming(&input, state);
+        render_buffer(state)
     })
 }
 
-fn ansi_to_html_streaming(input: &str, state: &mut AnsiRenderState) -> String {
+fn render_buffer(state: &AnsiRenderState) -> String {
+    if state.lines.is_empty() {
+        return state.current_line.clone();
+    }
+
+    let mut out = state.lines.join("\n");
+    out.push('\n');
+    out.push_str(&state.current_line);
+    out
+}
+
+fn ansi_to_html_streaming(input: &str, state: &mut AnsiRenderState) {
     let bytes = input.as_bytes();
-    let mut out = String::new();
     let mut text_start = 0usize;
     let mut i = 0usize;
 
@@ -47,12 +58,12 @@ fn ansi_to_html_streaming(input: &str, state: &mut AnsiRenderState) -> String {
         }
 
         if text_start < i {
-            out.push_str(&render_text(&input[text_start..i], state));
+            append_text_with_controls(&input[text_start..i], state);
         }
 
         if i + 1 >= bytes.len() {
             state.pending_escape.push_str(&input[i..]);
-            return out;
+            return;
         }
 
         match bytes[i + 1] {
@@ -68,13 +79,16 @@ fn ansi_to_html_streaming(input: &str, state: &mut AnsiRenderState) -> String {
 
                 if j >= bytes.len() {
                     state.pending_escape.push_str(&input[i..]);
-                    return out;
+                    return;
                 }
 
                 let final_byte = bytes[j];
-                if final_byte == b'm' {
-                    let params = &input[i + 2..j];
-                    apply_sgr(params, state);
+                let params = &input[i + 2..j];
+
+                match final_byte {
+                    b'm' => apply_sgr(params, state),
+                    b'K' => apply_erase_in_line(params, state),
+                    _ => {}
                 }
 
                 i = j + 1;
@@ -93,7 +107,7 @@ fn ansi_to_html_streaming(input: &str, state: &mut AnsiRenderState) -> String {
 
                 let Some(st_idx) = found_st else {
                     state.pending_escape.push_str(&input[i..]);
-                    return out;
+                    return;
                 };
 
                 let osc_content = &input[i + 2..st_idx];
@@ -113,7 +127,7 @@ fn ansi_to_html_streaming(input: &str, state: &mut AnsiRenderState) -> String {
 
                 if j >= bytes.len() {
                     state.pending_escape.push_str(&input[i..]);
-                    return out;
+                    return;
                 }
 
                 if (0x30..=0x7e).contains(&bytes[j]) {
@@ -129,10 +143,8 @@ fn ansi_to_html_streaming(input: &str, state: &mut AnsiRenderState) -> String {
     }
 
     if text_start < bytes.len() {
-        out.push_str(&render_text(&input[text_start..], state));
+        append_text_with_controls(&input[text_start..], state);
     }
-
-    out
 }
 
 fn apply_sgr(params: &str, state: &mut AnsiRenderState) {
@@ -176,7 +188,7 @@ fn sgr_fg_color(code: u16) -> Option<&'static str> {
         31 => Some("#aa0000"),
         32 => Some("#00aa00"),
         33 => Some("#aa5500"),
-        34 => Some("#0000aa"),
+        34 => Some("#3366ff"),
         35 => Some("#aa00aa"),
         36 => Some("#00aaaa"),
         37 => Some("#aaaaaa"),
@@ -230,14 +242,8 @@ fn normalize_terminal_text(s: &str) -> String {
 
     for ch in s.chars() {
         match ch {
-            // Backspace: remove the previously rendered character in this chunk.
-            '\u{0008}' => {
-                out.pop();
-            }
-            // Ignore carriage return; line feeds are handled as-is.
-            '\r' => {}
-            // Drop other C0 control chars except newline and tab.
-            '\u{0000}'..='\u{001F}' if ch != '\n' && ch != '\t' => {}
+            // Drop C0 control chars here; CR/LF are handled by append_text_with_controls.
+            '\u{0000}'..='\u{001F}' if ch != '\t' => {}
             _ => out.push(ch),
         }
     }
@@ -264,6 +270,67 @@ fn escape_attr(s: &str) -> String {
     escape_html(s)
 }
 
+fn append_text_with_controls(text: &str, state: &mut AnsiRenderState) {
+    let mut run = String::new();
+
+    for ch in text.chars() {
+        match ch {
+            '\r' => {
+                flush_text_run(&run, state);
+                run.clear();
+                // CR moves cursor to start of line; do not clear yet.
+                // The next printable text should replace from column 0.
+                state.carriage_return_pending = true;
+            }
+            '\n' => {
+                flush_text_run(&run, state);
+                run.clear();
+                state.lines.push(state.current_line.clone());
+                state.current_line.clear();
+                state.carriage_return_pending = false;
+            }
+            '\u{0008}' => {
+                // Best-effort handling: drop from the unflushed run.
+                run.pop();
+            }
+            _ => run.push(ch),
+        }
+    }
+
+    flush_text_run(&run, state);
+}
+
+fn flush_text_run(run: &str, state: &mut AnsiRenderState) {
+    if run.is_empty() {
+        return;
+    }
+
+    let rendered = render_text(run, state);
+    if rendered.is_empty() {
+        return;
+    }
+
+    if state.carriage_return_pending {
+        state.current_line.clear();
+        state.carriage_return_pending = false;
+    }
+
+    state.current_line.push_str(&rendered);
+}
+
+fn apply_erase_in_line(params: &str, state: &mut AnsiRenderState) {
+    // Common progress-meter sequence is ESC[2K (erase whole line).
+    // We also treat empty and "0" as clear-to-end; with our cursor model at line end,
+    // both effectively clear the current line.
+    match params {
+        "" | "0" | "2" => {
+            state.current_line.clear();
+            state.carriage_return_pending = false;
+        }
+        _ => {}
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -271,7 +338,8 @@ mod tests {
     #[test]
     fn esc_paren_b_does_not_leak_b() {
         let mut state = AnsiRenderState::default();
-        let out = ansi_to_html_streaming("ok\u{1b}(B", &mut state);
+        ansi_to_html_streaming("ok\u{1b}(B", &mut state);
+        let out = render_buffer(&state);
         assert_eq!(out, "ok");
         assert!(state.pending_escape.is_empty());
     }
@@ -280,7 +348,8 @@ mod tests {
     fn split_esc_paren_b_across_chunks_does_not_leak_b() {
         let mut state = AnsiRenderState::default();
 
-        let out1 = ansi_to_html_streaming("ok\u{1b}", &mut state);
+        ansi_to_html_streaming("ok\u{1b}", &mut state);
+        let out1 = render_buffer(&state);
         assert_eq!(out1, "ok");
         assert_eq!(state.pending_escape, "\u{1b}");
 
@@ -289,8 +358,30 @@ mod tests {
         state.pending_escape.clear();
         input2.push_str("(B");
 
-        let out2 = ansi_to_html_streaming(&input2, &mut state);
-        assert_eq!(out2, "");
+        ansi_to_html_streaming(&input2, &mut state);
+        let out2 = render_buffer(&state);
+        assert_eq!(out2, "ok");
         assert!(state.pending_escape.is_empty());
+    }
+
+    #[test]
+    fn carriage_return_replaces_current_line() {
+        let mut state = AnsiRenderState::default();
+        ansi_to_html_streaming("Compiling foo\rCompiling bar", &mut state);
+        assert_eq!(render_buffer(&state), "Compiling bar");
+    }
+
+    #[test]
+    fn carriage_return_without_rewrite_keeps_line_visible() {
+        let mut state = AnsiRenderState::default();
+        ansi_to_html_streaming("Compiling foo\r", &mut state);
+        assert_eq!(render_buffer(&state), "Compiling foo");
+    }
+
+    #[test]
+    fn erase_line_clears_progress_before_rewrite() {
+        let mut state = AnsiRenderState::default();
+        ansi_to_html_streaming("Step 1\u{1b}[2K\rStep 2", &mut state);
+        assert_eq!(render_buffer(&state), "Step 2");
     }
 }

@@ -17,6 +17,8 @@ struct Settings {
     pub release: String,
     #[attribute]
     pub clean: String,
+    #[attribute]
+    pub terminal: String,
 }
 
 impl Component for SettingsComponent {
@@ -50,6 +52,7 @@ impl SettingsComponent {
         let test: String = self.get_attribute("test").unwrap_or_default();
         let release: String = self.get_attribute("release").unwrap_or_default();
         let clean: String = self.get_attribute("clean").unwrap_or_default();
+        let terminal: String = self.get_attribute("terminal").unwrap_or_default();
 
         let content = html! {{
             <p>$(project)</p>
@@ -82,6 +85,11 @@ impl SettingsComponent {
                 <input id="clean" name="clean" type="text" value="$(clean)" />
             </p>
 
+            <p>
+                <label for="terminal">Terminal command</label><br />
+                <input id="terminal" name="terminal" type="text" value="$(terminal)" />
+            </p>
+
             <button onclick="saveSettings()">Save</button>
         }};
 
@@ -97,6 +105,7 @@ async fn save_settings() {
     let test: String = try_get_value("test");
     let release: String = try_get_value("release");
     let clean: String = try_get_value("clean");
+    let terminal: String = try_get_value("terminal");
 
     let settings = BuildCommands {
         git: Some(git),
@@ -104,6 +113,7 @@ async fn save_settings() {
         test: Some(test),
         release: Some(release),
         clean: Some(clean),
+        terminal: Some(terminal),
     };
 
     let endpont = format!("/save-settings?project={}", project);

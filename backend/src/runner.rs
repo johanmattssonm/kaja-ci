@@ -230,6 +230,7 @@ fn command_to_executable(action: &Action) -> Option<CommandBuilder> {
         "test" => parse_command(config_commands.test, folder).ok(),
         "release" => parse_command(config_commands.release, folder).ok(),
         "clean" => parse_command(config_commands.clean, folder).ok(),
+        "terminal" => parse_command(config_commands.terminal, folder).ok(),
         _ => {
             println!("Unknown action {}", action.action);
             None
@@ -266,6 +267,7 @@ async fn regiter_process(action: &Action, process: Arc<StdRwLock<Box<dyn Child +
         folder,
         Task {
             running_command: Some(process),
+            output_lines: Vec::new(),
         },
     );
 }
@@ -282,6 +284,7 @@ async fn unregister_process(action: &Action) {
         folder,
         Task {
             running_command: None,
+            output_lines: Vec::new(),
         },
     );
 }

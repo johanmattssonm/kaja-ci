@@ -47,6 +47,7 @@ pub async fn settings(params: web::Query<ProjectGetParams>) -> impl Responder {
                         test="$(settings.test.unwrap_or_default())"
                         release="$(settings.release.unwrap_or_default())"
                         clean="$(settings.clean.unwrap_or_default())"
+                        terminal="$(settings.terminal.unwrap_or_default())"
                     >
                     </project-settings>
                 </main>
