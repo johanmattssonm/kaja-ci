@@ -81,7 +81,7 @@ impl ConsoleComponent {
         let content = html! {{
             <h1 id="status">Loading</h1>
             <p>Project Folder: $(project)</p>
-            <pre id="$(id)-output"></pre>
+            <pre id="$(id)-output" tabindex="0"></pre>
             <input id="$(id)-stdin" placeholder="Type input and press Enter">
         }};
 
@@ -152,66 +152,140 @@ async fn connect_console_view(id: String, action: &str, project: &str) {
     }
 }
 
-fn setup_stdin_handler(id: &str, input_tx: mpsc::UnboundedSender<String>) {
-    let input_id = format!("{}-stdin", id);
-    let element = get_element_by_id(&input_id);
+fn key_to_terminal_input(event: &web_sys::KeyboardEvent) -> Option<String> {
+    if event.ctrl_key() {
+        let key = event.key();
+        if key.len() == 1 {
+            let ch = key.chars().next()?.to_ascii_lowercase();
+            if ch.is_ascii_lowercase() {
+                let code = (ch as u8) - b'a' + 1;
+                return Some((code as char).to_string());
+            }
+        }
 
-    if element.is_none() {
-        log!("No stdin input box for build component.");
-        return;
+        return match key.as_str() {
+            "[" => Some("\u{1b}".to_string()),
+            _ => None,
+        };
+    }
+
+    match event.key().as_str() {
+        "Enter" => Some("\r".to_string()),
+        "Backspace" => Some("\u{7f}".to_string()),
+        "Tab" => Some("\t".to_string()),
+        "Escape" => Some("\u{1b}".to_string()),
+        "ArrowUp" => Some("\u{1b}[A".to_string()),
+        "ArrowDown" => Some("\u{1b}[B".to_string()),
+        "ArrowRight" => Some("\u{1b}[C".to_string()),
+        "ArrowLeft" => Some("\u{1b}[D".to_string()),
+        "Home" => Some("\u{1b}[H".to_string()),
+        "End" => Some("\u{1b}[F".to_string()),
+        "PageUp" => Some("\u{1b}[5~".to_string()),
+        "PageDown" => Some("\u{1b}[6~".to_string()),
+        "Delete" => Some("\u{1b}[3~".to_string()),
+        key if key.len() == 1 => Some(key.to_string()),
+        _ => None,
+    }
+}
+
+fn send_stdin(stdin: String, input_tx: &mpsc::UnboundedSender<String>) {
+    let action = Action {
+        action: "STDIN".to_string(),
+        command: None,
+        folder: None,
+        stdin: Some(stdin),
     };
 
-    let input = element.unwrap().dyn_into::<HtmlInputElement>();
+    let json = serde_json::to_string(&action);
 
-    if input.is_err() {
-        log!("Expected HtmlInputElement for stdin box");
+    if json.is_err() {
+        log!("Failed to create json action.");
         return;
     }
 
-    let input = input.unwrap();
+    if input_tx.unbounded_send(json.unwrap()).is_err() {
+        log!("WebSocket for stdin channel is closed");
+    }
+}
+
+fn setup_stdin_handler(id: &str, input_tx: mpsc::UnboundedSender<String>) {
+    let input_id = format!("{}-stdin", id);
+    let output_id = format!("{}-output", id);
+
+    let input = match get_element_by_id(&input_id)
+        .and_then(|element| element.dyn_into::<HtmlInputElement>().ok())
+    {
+        Some(input) => input,
+        None => {
+            log!("Expected HtmlInputElement for stdin box");
+            return;
+        }
+    };
+
+    let output = match get_element_by_id(&output_id) {
+        Some(output) => output,
+        None => {
+            log!("No output box for build component.");
+            return;
+        }
+    };
+
     let keydown_input = input.clone();
     let keydown_tx = input_tx.clone();
     let keydown = Closure::<dyn FnMut(_)>::new(move |event: web_sys::KeyboardEvent| {
-        if event.key() != "Enter" {
+        let Some(stdin) = key_to_terminal_input(&event) else {
             return;
-        }
-
-        event.prevent_default();
-
-        let value = keydown_input.value();
-        let action = Action {
-            action: "STDIN".to_string(),
-            command: None,
-            folder: None,
-            stdin: Some(value),
         };
 
-        let json = serde_json::to_string(&action);
-
-        if json.is_err() {
-            log!("Failed to create json action.");
-            return;
-        }
-
-        let json = json.unwrap();
-
-        if keydown_tx.unbounded_send(json).is_err() {
-            log!("WebSocket for stdin channel is closed");
-            return;
-        }
-
+        event.prevent_default();
+        send_stdin(stdin, &keydown_tx);
         keydown_input.set_value("");
     });
 
-    let callback_ref = keydown.as_ref().unchecked_ref();
-    let registerd = input.add_event_listener_with_callback("keydown", callback_ref);
-
-    if registerd.is_err() {
+    if input
+        .add_event_listener_with_callback("keydown", keydown.as_ref().unchecked_ref())
+        .is_err()
+    {
         log!("Failed to register stdin keydown handler");
         return;
     }
 
-    keydown.forget(); // this is ok because the input is around until user leaves this page
+    // Fullscreen terminal UIs often involve users clicking the output area.
+    // Keep keyboard flow working by forwarding keys from the output element too.
+    let output_tx = input_tx.clone();
+    let output_keydown = Closure::<dyn FnMut(_)>::new(move |event: web_sys::KeyboardEvent| {
+        let Some(stdin) = key_to_terminal_input(&event) else {
+            return;
+        };
+
+        event.prevent_default();
+        send_stdin(stdin, &output_tx);
+    });
+
+    if output
+        .add_event_listener_with_callback("keydown", output_keydown.as_ref().unchecked_ref())
+        .is_err()
+    {
+        log!("Failed to register output keydown handler");
+        return;
+    }
+
+    let focus_input = input.clone();
+    let click_focus = Closure::<dyn FnMut(_)>::new(move |_event: web_sys::Event| {
+        let _ = focus_input.focus();
+    });
+
+    if output
+        .add_event_listener_with_callback("click", click_focus.as_ref().unchecked_ref())
+        .is_err()
+    {
+        log!("Failed to register output click handler");
+        return;
+    }
+
+    keydown.forget();
+    output_keydown.forget();
+    click_focus.forget();
 }
 
 fn process_build_output(id: &str, chunk: String) {
@@ -238,6 +312,18 @@ fn process_build_output(id: &str, chunk: String) {
     }
 
     if let Some(stdout) = resp.stdout {
+        if resp.action == "SCREEN" {
+            let rendered = match (resp.cursor_row, resp.cursor_col) {
+                (Some(row), Some(col)) => {
+                    color::render_terminal_screen_with_cursor(&stdout, row, col)
+                }
+                _ => color::render_terminal_screen(&stdout),
+            };
+
+            element.set_inner_html(&rendered);
+            return;
+        }
+
         let rendered = color::append_ansi_chunk(id, &stdout);
         element.set_inner_html(&rendered);
         element.set_scroll_top(element.scroll_height());

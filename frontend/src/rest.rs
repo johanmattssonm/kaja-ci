@@ -13,6 +13,8 @@ pub struct ActionResponse {
     pub action: String,
     pub status: Option<String>,
     pub stdout: Option<String>,
+    pub cursor_row: Option<usize>,
+    pub cursor_col: Option<usize>,
 }
 
 #[derive(Debug, Default, Serialize, Deserialize)]

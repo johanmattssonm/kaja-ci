@@ -251,6 +251,54 @@ fn normalize_terminal_text(s: &str) -> String {
     out
 }
 
+pub fn render_terminal_screen(screen: &str) -> String {
+    escape_html(screen)
+}
+
+pub fn render_terminal_screen_with_cursor(
+    screen: &str,
+    cursor_row: usize,
+    cursor_col: usize,
+) -> String {
+    let mut out = String::new();
+
+    for (row_idx, line) in screen.split('\n').enumerate() {
+        if row_idx > 0 {
+            out.push('\n');
+        }
+
+        if row_idx != cursor_row {
+            out.push_str(&escape_html(line));
+            continue;
+        }
+
+        let chars: Vec<char> = line.chars().collect();
+
+        if chars.is_empty() {
+            out.push_str(
+                r#"<span style=\"background: currentColor; color: transparent;\">&nbsp;</span>"#,
+            );
+            continue;
+        }
+
+        let clamped_col = cursor_col.min(chars.len().saturating_sub(1));
+
+        let before: String = chars.iter().take(clamped_col).collect();
+        let cur = chars[clamped_col];
+        let after: String = chars.iter().skip(clamped_col + 1).collect();
+
+        out.push_str(&escape_html(&before));
+        out.push_str(
+            r#"<span style=\"background: currentColor; color: var(--background-color, #000);\">"#,
+        );
+        out.push_str(&escape_html(&cur.to_string()));
+        out.push_str("</span>");
+        out.push_str(&escape_html(&after));
+    }
+
+    out
+}
+
 fn escape_html(s: &str) -> String {
     let mut out = String::with_capacity(s.len());
     for ch in s.chars() {

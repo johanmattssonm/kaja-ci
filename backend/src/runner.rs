@@ -3,6 +3,7 @@ use actix_ws::{Message, Session, handle};
 use portable_pty::{Child, CommandBuilder, PtySize, native_pty_system};
 use serde::Deserialize;
 use std::collections::VecDeque;
+use std::fmt::Write as _;
 use std::io::{Read, Write};
 
 use std::path::PathBuf;
@@ -28,6 +29,515 @@ pub struct ProjectGetParams {
 struct BuildInputState {
     tx: Option<mpsc::Sender<String>>,
     pending: VecDeque<String>,
+}
+
+#[derive(Clone, Copy)]
+enum EscapeState {
+    Esc,
+    Csi,
+}
+
+struct TerminalScreen {
+    rows: usize,
+    cols: usize,
+    grid: Vec<Vec<char>>,
+    cursor_row: usize,
+    cursor_col: usize,
+    saved_cursor: Option<(usize, usize)>,
+    escape_state: Option<EscapeState>,
+    csi_params: String,
+    scroll_top: usize,
+    scroll_bottom: usize,
+}
+
+impl TerminalScreen {
+    fn new(rows: usize, cols: usize) -> Self {
+        Self {
+            rows,
+            cols,
+            grid: vec![vec![' '; cols]; rows],
+            cursor_row: 0,
+            cursor_col: 0,
+            saved_cursor: None,
+            escape_state: None,
+            csi_params: String::new(),
+            scroll_top: 0,
+            scroll_bottom: rows.saturating_sub(1),
+        }
+    }
+
+    fn feed(&mut self, input: &str) {
+        for b in input.bytes() {
+            self.process_byte(b);
+        }
+    }
+
+    fn process_byte(&mut self, b: u8) {
+        match self.escape_state {
+            Some(EscapeState::Esc) => match b {
+                b'[' => {
+                    self.escape_state = Some(EscapeState::Csi);
+                    self.csi_params.clear();
+                }
+                b'7' => {
+                    self.saved_cursor = Some((self.cursor_row, self.cursor_col));
+                    self.escape_state = None;
+                }
+                b'8' => {
+                    if let Some((row, col)) = self.saved_cursor {
+                        self.cursor_row = row.min(self.rows.saturating_sub(1));
+                        self.cursor_col = col.min(self.cols.saturating_sub(1));
+                    }
+                    self.escape_state = None;
+                }
+                b'M' => {
+                    self.reverse_index();
+                    self.escape_state = None;
+                }
+                _ => {
+                    self.escape_state = None;
+                }
+            },
+            Some(EscapeState::Csi) => {
+                if (0x40..=0x7e).contains(&b) {
+                    let final_byte = b as char;
+                    let params = self.csi_params.clone();
+                    self.apply_csi(final_byte, &params);
+                    self.csi_params.clear();
+                    self.escape_state = None;
+                } else {
+                    self.csi_params.push(b as char);
+                }
+            }
+            None => match b {
+                0x1b => self.escape_state = Some(EscapeState::Esc),
+                b'\r' => self.cursor_col = 0,
+                b'\n' => self.new_line(),
+                0x08 => {
+                    self.cursor_col = self.cursor_col.saturating_sub(1);
+                }
+                b'\t' => {
+                    let spaces = 8 - (self.cursor_col % 8);
+                    for _ in 0..spaces {
+                        self.put_char(' ');
+                    }
+                }
+                0x20..=0x7e => self.put_char(b as char),
+                _ => {}
+            },
+        }
+    }
+
+    fn apply_csi(&mut self, final_byte: char, params: &str) {
+        let params = params.trim_start_matches('?');
+
+        match final_byte {
+            'A' => {
+                let n = parse_csi_n(params, 1);
+                self.cursor_row = self.cursor_row.saturating_sub(n);
+            }
+            'B' => {
+                let n = parse_csi_n(params, 1);
+                self.cursor_row = (self.cursor_row + n).min(self.rows.saturating_sub(1));
+            }
+            'C' => {
+                let n = parse_csi_n(params, 1);
+                self.cursor_col = (self.cursor_col + n).min(self.cols.saturating_sub(1));
+            }
+            'D' => {
+                let n = parse_csi_n(params, 1);
+                self.cursor_col = self.cursor_col.saturating_sub(n);
+            }
+            'E' => {
+                let n = parse_csi_n(params, 1);
+                self.cursor_row = (self.cursor_row + n).min(self.rows.saturating_sub(1));
+                self.cursor_col = 0;
+            }
+            'F' => {
+                let n = parse_csi_n(params, 1);
+                self.cursor_row = self.cursor_row.saturating_sub(n);
+                self.cursor_col = 0;
+            }
+            'G' => {
+                let col = parse_csi_n(params, 1).saturating_sub(1);
+                self.cursor_col = col.min(self.cols.saturating_sub(1));
+            }
+            'H' | 'f' => {
+                let (row, col) = parse_cup(params);
+                self.cursor_row = row.min(self.rows.saturating_sub(1));
+                self.cursor_col = col.min(self.cols.saturating_sub(1));
+            }
+            'd' => {
+                let row = parse_csi_n(params, 1).saturating_sub(1);
+                self.cursor_row = row.min(self.rows.saturating_sub(1));
+            }
+            'J' => {
+                let mode = parse_csi_n(params, 0);
+                self.erase_display(mode);
+            }
+            'K' => {
+                let mode = parse_csi_n(params, 0);
+                self.erase_line(mode);
+            }
+            '@' => {
+                let n = parse_csi_n(params, 1);
+                self.insert_chars(n);
+            }
+            'P' => {
+                let n = parse_csi_n(params, 1);
+                self.delete_chars(n);
+            }
+            'L' => {
+                let n = parse_csi_n(params, 1);
+                self.insert_lines(n);
+            }
+            'M' => {
+                let n = parse_csi_n(params, 1);
+                self.delete_lines(n);
+            }
+            'X' => {
+                let n = parse_csi_n(params, 1);
+                self.erase_chars(n);
+            }
+            'S' => {
+                let n = parse_csi_n(params, 1);
+                self.scroll_up_region(n);
+            }
+            'T' => {
+                let n = parse_csi_n(params, 1);
+                self.scroll_down_region(n);
+            }
+            'r' => {
+                self.set_scroll_region(params);
+            }
+            's' => {
+                self.saved_cursor = Some((self.cursor_row, self.cursor_col));
+            }
+            'u' => {
+                if let Some((row, col)) = self.saved_cursor {
+                    self.cursor_row = row.min(self.rows.saturating_sub(1));
+                    self.cursor_col = col.min(self.cols.saturating_sub(1));
+                }
+            }
+            'm' | 'h' | 'l' => {}
+            _ => {}
+        }
+    }
+
+    fn erase_display(&mut self, mode: usize) {
+        match mode {
+            0 => {
+                self.erase_line(0);
+                for row in (self.cursor_row + 1)..self.rows {
+                    for col in 0..self.cols {
+                        self.grid[row][col] = ' ';
+                    }
+                }
+            }
+            1 => {
+                for row in 0..self.cursor_row {
+                    for col in 0..self.cols {
+                        self.grid[row][col] = ' ';
+                    }
+                }
+                for col in 0..=self.cursor_col.min(self.cols.saturating_sub(1)) {
+                    self.grid[self.cursor_row][col] = ' ';
+                }
+            }
+            2 => {
+                for row in 0..self.rows {
+                    for col in 0..self.cols {
+                        self.grid[row][col] = ' ';
+                    }
+                }
+                self.cursor_row = 0;
+                self.cursor_col = 0;
+                self.scroll_top = 0;
+                self.scroll_bottom = self.rows.saturating_sub(1);
+            }
+            _ => {}
+        }
+    }
+
+    fn erase_line(&mut self, mode: usize) {
+        match mode {
+            0 => {
+                for col in self.cursor_col..self.cols {
+                    self.grid[self.cursor_row][col] = ' ';
+                }
+            }
+            1 => {
+                for col in 0..=self.cursor_col.min(self.cols.saturating_sub(1)) {
+                    self.grid[self.cursor_row][col] = ' ';
+                }
+            }
+            2 => {
+                for col in 0..self.cols {
+                    self.grid[self.cursor_row][col] = ' ';
+                }
+            }
+            _ => {}
+        }
+    }
+
+    fn insert_chars(&mut self, n: usize) {
+        if self.rows == 0 || self.cols == 0 {
+            return;
+        }
+
+        let row = self.cursor_row.min(self.rows - 1);
+        let col = self.cursor_col.min(self.cols - 1);
+        let shift = n.min(self.cols.saturating_sub(col));
+
+        if shift == 0 {
+            return;
+        }
+
+        for i in (col..self.cols).rev() {
+            let src = i.saturating_sub(shift);
+            self.grid[row][i] = if src >= col { self.grid[row][src] } else { ' ' };
+        }
+    }
+
+    fn delete_chars(&mut self, n: usize) {
+        if self.rows == 0 || self.cols == 0 {
+            return;
+        }
+
+        let row = self.cursor_row.min(self.rows - 1);
+        let col = self.cursor_col.min(self.cols - 1);
+        let shift = n.min(self.cols.saturating_sub(col));
+
+        if shift == 0 {
+            return;
+        }
+
+        for i in col..self.cols {
+            let src = i + shift;
+            self.grid[row][i] = if src < self.cols {
+                self.grid[row][src]
+            } else {
+                ' '
+            };
+        }
+    }
+
+    fn erase_chars(&mut self, n: usize) {
+        if self.rows == 0 || self.cols == 0 {
+            return;
+        }
+
+        let row = self.cursor_row.min(self.rows - 1);
+        let col = self.cursor_col.min(self.cols - 1);
+        let end = (col + n).min(self.cols);
+
+        for i in col..end {
+            self.grid[row][i] = ' ';
+        }
+    }
+
+    fn insert_lines(&mut self, n: usize) {
+        if self.rows == 0 || self.cols == 0 {
+            return;
+        }
+
+        let row = self.cursor_row.min(self.rows - 1);
+        if row < self.scroll_top || row > self.scroll_bottom {
+            return;
+        }
+
+        let count = n.min(self.scroll_bottom.saturating_sub(row) + 1);
+
+        for _ in 0..count {
+            self.grid.insert(row, vec![' '; self.cols]);
+            self.grid.remove(self.scroll_bottom + 1);
+        }
+    }
+
+    fn delete_lines(&mut self, n: usize) {
+        if self.rows == 0 || self.cols == 0 {
+            return;
+        }
+
+        let row = self.cursor_row.min(self.rows - 1);
+        if row < self.scroll_top || row > self.scroll_bottom {
+            return;
+        }
+
+        let count = n.min(self.scroll_bottom.saturating_sub(row) + 1);
+
+        for _ in 0..count {
+            self.grid.remove(row);
+            self.grid.insert(self.scroll_bottom, vec![' '; self.cols]);
+        }
+    }
+
+    fn put_char(&mut self, ch: char) {
+        if self.rows == 0 || self.cols == 0 {
+            return;
+        }
+
+        if self.cursor_row >= self.rows {
+            self.cursor_row = self.rows - 1;
+        }
+
+        if self.cursor_col >= self.cols {
+            self.cursor_col = 0;
+            self.new_line();
+        }
+
+        self.grid[self.cursor_row][self.cursor_col] = ch;
+        self.cursor_col += 1;
+
+        if self.cursor_col >= self.cols {
+            self.cursor_col = 0;
+            self.new_line();
+        }
+    }
+
+    fn new_line(&mut self) {
+        if self.rows == 0 || self.cols == 0 {
+            return;
+        }
+
+        if self.cursor_row == self.scroll_bottom {
+            self.scroll_up_region(1);
+            return;
+        }
+
+        if self.cursor_row + 1 >= self.rows {
+            self.cursor_row = self.rows.saturating_sub(1);
+            return;
+        }
+
+        self.cursor_row += 1;
+    }
+
+    fn reverse_index(&mut self) {
+        if self.rows == 0 || self.cols == 0 {
+            return;
+        }
+
+        if self.cursor_row == self.scroll_top {
+            self.scroll_down_region(1);
+        } else {
+            self.cursor_row = self.cursor_row.saturating_sub(1);
+        }
+    }
+
+    fn scroll_up_region(&mut self, n: usize) {
+        if self.rows == 0 || self.cols == 0 || self.scroll_top > self.scroll_bottom {
+            return;
+        }
+
+        let count = n.min(self.scroll_bottom.saturating_sub(self.scroll_top) + 1);
+
+        for _ in 0..count {
+            self.grid.remove(self.scroll_top);
+            self.grid.insert(self.scroll_bottom, vec![' '; self.cols]);
+        }
+    }
+
+    fn scroll_down_region(&mut self, n: usize) {
+        if self.rows == 0 || self.cols == 0 || self.scroll_top > self.scroll_bottom {
+            return;
+        }
+
+        let count = n.min(self.scroll_bottom.saturating_sub(self.scroll_top) + 1);
+
+        for _ in 0..count {
+            self.grid.remove(self.scroll_bottom);
+            self.grid.insert(self.scroll_top, vec![' '; self.cols]);
+        }
+    }
+
+    fn set_scroll_region(&mut self, params: &str) {
+        if self.rows == 0 {
+            return;
+        }
+
+        if params.is_empty() {
+            self.scroll_top = 0;
+            self.scroll_bottom = self.rows.saturating_sub(1);
+            self.cursor_row = 0;
+            self.cursor_col = 0;
+            return;
+        }
+
+        let mut parts = params.split(';');
+        let top = parts
+            .next()
+            .and_then(|v| v.parse::<usize>().ok())
+            .filter(|n| *n > 0)
+            .unwrap_or(1)
+            - 1;
+        let bottom = parts
+            .next()
+            .and_then(|v| v.parse::<usize>().ok())
+            .filter(|n| *n > 0)
+            .unwrap_or(self.rows)
+            - 1;
+
+        if top < bottom && bottom < self.rows {
+            self.scroll_top = top;
+            self.scroll_bottom = bottom;
+        } else {
+            self.scroll_top = 0;
+            self.scroll_bottom = self.rows.saturating_sub(1);
+        }
+
+        self.cursor_row = 0;
+        self.cursor_col = 0;
+    }
+
+    fn to_text(&self) -> String {
+        let mut out = String::with_capacity(self.rows * (self.cols + 1));
+
+        for (idx, row) in self.grid.iter().enumerate() {
+            for ch in row {
+                let _ = out.write_char(*ch);
+            }
+
+            if idx + 1 < self.rows {
+                out.push('\n');
+            }
+        }
+
+        out
+    }
+}
+
+fn parse_csi_n(params: &str, default: usize) -> usize {
+    if params.is_empty() {
+        return default;
+    }
+
+    params
+        .split(';')
+        .next()
+        .and_then(|v| v.parse::<usize>().ok())
+        .filter(|n| *n > 0)
+        .unwrap_or(default)
+}
+
+fn parse_cup(params: &str) -> (usize, usize) {
+    if params.is_empty() {
+        return (0, 0);
+    }
+
+    let mut parts = params.split(';');
+    let row = parts
+        .next()
+        .and_then(|v| v.parse::<usize>().ok())
+        .and_then(|n| n.checked_sub(1))
+        .unwrap_or(0);
+    let col = parts
+        .next()
+        .and_then(|v| v.parse::<usize>().ok())
+        .and_then(|n| n.checked_sub(1))
+        .unwrap_or(0);
+
+    (row, col)
 }
 
 pub async fn websocket(
@@ -121,6 +631,8 @@ async fn send_stdout(session: &mut Session, line: &str) {
         stdout: Some(line.to_string()),
         action: "STDOUT".to_string(),
         status: None,
+        cursor_row: None,
+        cursor_col: None,
     };
 
     if let Ok(json) = serde_json::to_string(&action) {
@@ -135,6 +647,8 @@ async fn send_status(session: &mut Session, line: &str) {
         stdout: None,
         action: "STATUS".to_string(),
         status: Some(format!("status: {line}")),
+        cursor_row: None,
+        cursor_col: None,
     };
 
     if let Ok(json) = serde_json::to_string(&action) {
@@ -316,9 +830,12 @@ async fn start_build(
     send_status(session, "RUNNING").await;
     let pty_system = native_pty_system();
 
+    let rows = 20u16;
+    let cols = 80u16;
+
     let pty_pair = match pty_system.openpty(PtySize {
-        rows: 30,
-        cols: 120,
+        rows,
+        cols,
         pixel_width: 0,
         pixel_height: 0,
     }) {
@@ -390,17 +907,21 @@ async fn start_build(
     std::thread::spawn(move || {
         let mut reader = reader;
         let mut buf = [0_u8; 4096];
+        let mut screen = TerminalScreen::new(rows as usize, cols as usize);
 
         loop {
             match reader.read(&mut buf) {
                 Ok(0) => break,
                 Ok(n) => {
                     let chunk = String::from_utf8_lossy(&buf[..n]).to_string();
+                    screen.feed(&chunk);
 
                     let action = ActionResponse {
-                        stdout: Some(chunk.to_string()),
-                        action: "OUTPUT".to_string(),
+                        stdout: Some(screen.to_text()),
+                        action: "SCREEN".to_string(),
                         status: None,
+                        cursor_row: Some(screen.cursor_row),
+                        cursor_col: Some(screen.cursor_col),
                     };
 
                     let json = serde_json::to_string(&action);
@@ -444,10 +965,6 @@ async fn start_build(
     std::thread::spawn(move || {
         while let Some(data) = input_rx.blocking_recv() {
             if writer.write_all(data.as_bytes()).is_err() {
-                break;
-            }
-
-            if writer.write_all(b"\n").is_err() {
                 break;
             }
 
