@@ -1,12 +1,17 @@
 use actix_web::{Error, HttpRequest, web};
 use actix_ws::{Message, Session, handle};
 use portable_pty::{CommandBuilder, PtySize, native_pty_system};
-use serde::{Deserialize, Serialize};
+use serde::Deserialize;
 use std::collections::VecDeque;
 use std::io::{Read, Write};
 use std::path::PathBuf;
 use std::sync::Arc;
 use tokio::sync::{Mutex, mpsc};
+
+#[path = "../../frontend/src/rest.rs"]
+mod rest;
+
+use rest::{Action, ActionResponse};
 
 pub const BUILD_DIR: &str = "/home/johan/Downloads/resting-chair";
 
@@ -36,21 +41,6 @@ pub async fn websocket(
     });
 
     Ok(response)
-}
-
-#[derive(Debug, Deserialize)]
-struct Action {
-    action: String,
-    command: Option<String>,
-    folder: Option<String>,
-    stdin: Option<String>,
-}
-
-#[derive(Serialize)]
-struct ActionResponse {
-    action: String,
-    status: Option<String>,
-    stdout: Option<String>,
 }
 
 fn parse_action(line: String) -> Option<Action> {
