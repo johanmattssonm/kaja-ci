@@ -4,9 +4,10 @@ use actix_web::{App, Error, HttpRequest, HttpResponse, HttpServer, Responder, we
 use actix_ws::{Message, Session, handle};
 use kaja_html_macro::html;
 use portable_pty::{CommandBuilder, PtySize, native_pty_system};
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
+use std::collections::VecDeque;
 use std::io::{Read, Write};
-use std::path::{self, PathBuf};
+use std::path::PathBuf;
 use std::sync::Arc;
 use tokio::sync::{Mutex, mpsc};
 
@@ -17,46 +18,50 @@ struct ProjectGetParams {
     project: String,
 }
 
+#[derive(Default)]
+struct BuildInputState {
+    tx: Option<mpsc::Sender<String>>,
+    pending: VecDeque<String>,
+}
+
 async fn websocket(req: HttpRequest, body: web::Payload) -> Result<actix_web::HttpResponse, Error> {
     let (response, session, mut msg_stream) = handle(&req, body)?;
-    let stdin_send = Arc::new(Mutex::new(None::<mpsc::Sender<String>>));
+    let stdin_state = Arc::new(Mutex::new(BuildInputState::default()));
 
     actix_web::rt::spawn(async move {
         let mut session = session;
         while let Some(Ok(msg)) = msg_stream.recv().await {
-            handle_message(msg, &mut session, stdin_send.clone()).await;
+            handle_message(msg, &mut session, stdin_state.clone()).await;
         }
     });
 
     Ok(response)
 }
 
-#[derive(Debug)]
+#[derive(Debug, Deserialize)]
 struct Action {
-    command: String,
-    payload: String,
+    action: String,
+    command: Option<String>,
+    folder: Option<String>,
+    stdin: Option<String>,
+}
+
+#[derive(Serialize)]
+struct ActionResponse {
+    action: String,
+    status: Option<String>,
+    stdout: Option<String>,
 }
 
 fn parse_action(line: String) -> Option<Action> {
-    if !line.starts_with("ACTION ") {
-        println!("Not an action.");
+    let action = serde_json::from_str::<Action>(&line);
+
+    if action.is_err() {
+        println!("Failed to parse action: {:?}", line);
         return None;
     }
 
-    let line = &line["ACTION ".len()..line.len()];
-    let sepatator = line.find(" ");
-
-    if sepatator.is_none() {
-        println!("No separator after action.");
-        return None;
-    }
-
-    let separator = sepatator.unwrap();
-
-    Some(Action {
-        command: line[0..sepatator.unwrap()].to_string(),
-        payload: line[separator + 1..line.len()].to_string(),
-    })
+    action.ok()
 }
 
 fn folder_exists(path: &str) -> bool {
@@ -75,18 +80,14 @@ fn folder_exists(path: &str) -> bool {
 async fn process_action(
     text: String,
     session: &mut Session,
-    stdin_tx: Arc<Mutex<Option<mpsc::Sender<String>>>>,
+    stdin_state: Arc<Mutex<BuildInputState>>,
 ) {
-    if stdin_tx.lock().await.is_some() {
-        let _ = session
-            .text("Console is already attached.".to_string())
-            .await;
+    if stdin_state.lock().await.tx.is_some() {
+        send_stdout(session, "Console is already attached.").await;
         return;
     }
 
     let action = parse_action(text);
-
-    println!("Action: {:?}", action);
 
     if action.is_none() {
         println!("Malformed action");
@@ -95,79 +96,139 @@ async fn process_action(
 
     let action = action.unwrap();
 
-    if !folder_exists(&action.payload) {
+    let folder = match action.folder.as_deref() {
+        Some(folder) => folder,
+        None => {
+            send_stdout(session, "Action is missing a project folder.").await;
+            send_status(session, "FAILED").await;
+            return;
+        }
+    };
+
+    if !folder_exists(folder) {
         println!("Project folder does not exist or is not writable.");
-
-        let _ = session
-            .text("stdout: Can't find writable project folder.".to_string())
-            .await;
-
-        let _ = session.text("status: FAILED".to_string()).await;
+        send_stdout(session, "Can't find writable project folder.").await;
+        send_status(session, "FAILED").await;
         return;
     }
 
     let mut build_session = session.clone();
-    let build_stdin_tx = stdin_tx.clone();
+    let build_stdin_state = stdin_state.clone();
 
     actix_web::rt::spawn(async move {
-        start_build(&mut build_session, build_stdin_tx, action).await;
+        start_build(&mut build_session, build_stdin_state, action).await;
     });
+}
+
+async fn send_stdout(session: &mut Session, line: &str) {
+    println!("{}", line);
+
+    let action = ActionResponse {
+        stdout: Some(line.to_string()),
+        action: "STDOUT".to_string(),
+        status: None,
+    };
+
+    if let Ok(json) = serde_json::to_string(&action) {
+        let _ = session.text(json).await;
+    }
+}
+
+async fn send_status(session: &mut Session, line: &str) {
+    println!("Task status: {}", line);
+
+    let action = ActionResponse {
+        stdout: None,
+        action: "STATUS".to_string(),
+        status: Some(format!("status: {line}")),
+    };
+
+    if let Ok(json) = serde_json::to_string(&action) {
+        let _ = session.text(json).await;
+    }
 }
 
 async fn handle_message(
     msg: Message,
     session: &mut Session,
-    stdin_tx: Arc<Mutex<Option<mpsc::Sender<String>>>>,
+    stdin_state: Arc<Mutex<BuildInputState>>,
 ) {
     match msg {
         Message::Text(text) => {
             let text = text.to_string();
-
-            println!("WS: {}", text);
-
-            if text.starts_with("ACTION ") {
-                process_action(text, session, stdin_tx).await;
-            } else if text.starts_with("STDIN ") {
-                let input = &text["STDIN ".len()..text.len()];
-                let build_stdin_tx = stdin_tx.clone();
-                let tx = build_stdin_tx.lock().await.clone();
-
-                if let Some(tx) = tx {
-                    let _ = tx.try_send(input.to_string());
-                }
-            } else {
-                let tx = stdin_tx.lock().await.clone();
-                if let Some(tx) = tx {
-                    let _ = tx.send(text).await;
-                } else {
-                    println!("Not an action: {}", text);
-                }
-            }
+            process_ws_message(text, session, stdin_state).await
         }
         Message::Close(_) => {
             println!("WebSocket closed");
-            return;
         }
-        _ => {}
+        _ => {
+            println!("Unexpected WebSocket message");
+        }
+    }
+}
+
+async fn process_ws_message(
+    text: String,
+    session: &mut Session,
+    stdin_state: Arc<Mutex<BuildInputState>>,
+) {
+    #[cfg(debug_assertions)]
+    println!("WS: {}", text); // don't print in release mode to protect pin, password etc.
+
+    #[cfg(not(debug_assertions))]
+    println!("WS: got websocket message.");
+
+    let action = serde_json::from_str(text.as_str());
+
+    if action.is_err() {
+        println!("Failed to parse action. {:?}", text);
+        return;
+    }
+
+    let action: Action = action.unwrap();
+
+    if action.stdin.is_some() {
+        process_std_in(action, stdin_state).await;
+    } else {
+        process_action(text, session, stdin_state).await;
+    }
+}
+
+async fn process_std_in(action: Action, stdin_state: Arc<Mutex<BuildInputState>>) {
+    let input_line = action.stdin.unwrap();
+    let mut state = stdin_state.lock().await;
+
+    if let Some(tx) = state.tx.clone() {
+        if tx.try_send(input_line.clone()).is_err() {
+            println!("STDIN send failed, buffering input.");
+            state.pending.push_back(input_line);
+        }
+    } else {
+        state.pending.push_back(input_line);
     }
 }
 
 fn command_to_executable(action: Action) -> Option<CommandBuilder> {
-    match action.command.as_str() {
+    let folder = action.folder?;
+
+    match action.action.as_str() {
         "build" => {
-            let mut cmd = CommandBuilder::new("/home/johan/Downloads/resting-chair/test.sh");
-            cmd.cwd(action.payload);
+            let program = action
+                .command
+                .unwrap_or_else(|| "/home/johan/Downloads/resting-chair/test.sh".to_string());
+            let mut cmd = CommandBuilder::new(program);
+            cmd.cwd(folder);
             Some(cmd)
         }
         "fetch" => {
             let mut cmd = CommandBuilder::new("git");
             cmd.arg("fetch");
             cmd.arg("--all");
-            cmd.cwd(action.payload);
+            cmd.cwd(folder);
             Some(cmd)
         }
         _ => {
-            println!("Unknown action {}", action.command);
+            println!("Unknown action {}", action.action);
             None
         }
     }
@@ -175,11 +236,10 @@ fn command_to_executable(action: Action) -> Option<CommandBuilder> {
 
 async fn start_build(
     session: &mut Session,
-    stdin_tx: Arc<Mutex<Option<mpsc::Sender<String>>>>,
+    stdin_state: Arc<Mutex<BuildInputState>>,
     action: Action,
 ) {
-    let _ = session.text("status: RUNNING".to_string()).await;
-
+    send_status(session, "RUNNING").await;
     let pty_system = native_pty_system();
 
     let pty_pair = match pty_system.openpty(PtySize {
@@ -190,10 +250,8 @@ async fn start_build(
     }) {
         Ok(pair) => pair,
         Err(err) => {
-            let _ = session.text("status: FAILED".to_string()).await;
-            let _ = session
-                .text(format!("failed to allocate PTY in {BUILD_DIR}: {err}"))
-                .await;
+            send_status(session, "FAILED").await;
+            send_stdout(session, format!("failed to allocate PTY: {err}").as_str()).await;
             return;
         }
     };
@@ -212,12 +270,12 @@ async fn start_build(
     let mut child = match pty_pair.slave.spawn_command(cmd) {
         Ok(child) => child,
         Err(err) => {
-            let _ = session.text("status: FAILED".to_string()).await;
-            let _ = session
-                .text(format!(
-                    "failed to start build command in {BUILD_DIR}: {err}"
-                ))
-                .await;
+            send_status(session, "FAILED").await;
+            send_stdout(
+                session,
+                format!("failed to start build command in: {err}").as_str(),
+            )
+            .await;
             return;
         }
     };
@@ -227,10 +285,12 @@ async fn start_build(
     let reader = match pty_pair.master.try_clone_reader() {
         Ok(reader) => reader,
         Err(err) => {
-            let _ = session.text("status: FAILED".to_string()).await;
-            let _ = session
-                .text(format!("failed to open PTY reader: {err}"))
-                .await;
+            send_status(session, "FAILED").await;
+            send_stdout(
+                session,
+                format!("failed to open PTY reader: {err}").as_str(),
+            )
+            .await;
             return;
         }
     };
@@ -238,10 +298,12 @@ async fn start_build(
     let mut writer = match pty_pair.master.take_writer() {
         Ok(writer) => writer,
         Err(err) => {
-            let _ = session.text("status: FAILED".to_string()).await;
-            let _ = session
-                .text(format!("failed to open PTY writer: {err}"))
-                .await;
+            send_status(session, "FAILED").await;
+            send_stdout(
+                session,
+                format!("failed to open PTY writer: {err}").as_str(),
+            )
+            .await;
             return;
         }
     };
@@ -259,7 +321,20 @@ async fn start_build(
                 Ok(n) => {
                     let chunk = String::from_utf8_lossy(&buf[..n]).to_string();
 
-                    if tx.blocking_send(chunk).is_err() {
+                    let action = ActionResponse {
+                        stdout: Some(chunk.to_string()),
+                        action: "OUTPUT".to_string(),
+                        status: None,
+                    };
+
+                    let json = serde_json::to_string(&action);
+
+                    if json.is_err() {
+                        println!("Failed to build response package.");
+                        break;
+                    }
+
+                    if tx.blocking_send(json.unwrap()).is_err() {
                         break;
                     }
                 }
@@ -268,8 +343,7 @@ async fn start_build(
                     break;
                 }
                 Err(err) => {
-                    let _ = tx.blocking_send("status: FAILED".to_string());
-                    let _ = tx.blocking_send(format!("\r\nPTY read error: {err}\r\n"));
+                    let _ = tx.blocking_send(format!("PTY read error: {err}"));
                     break;
                 }
             }
@@ -279,8 +353,15 @@ async fn start_build(
     let (input_tx, mut input_rx) = mpsc::channel::<String>(100);
 
     {
-        let mut slot = stdin_tx.lock().await;
-        *slot = Some(input_tx);
+        let mut state = stdin_state.lock().await;
+        state.tx = Some(input_tx.clone());
+
+        while let Some(pending) = state.pending.pop_front() {
+            if input_tx.try_send(pending).is_err() {
+                send_stdout(session, "Failed to flush buffered stdin input.").await;
+                break;
+            }
+        }
     }
 
     // Write WebSocket input to PTY.
@@ -313,22 +394,23 @@ async fn start_build(
 
     if let Ok(status) = status {
         let exit_code = status.exit_code();
-        let _ = session
-            .text(format!("Task finished, exit code: {:?}", exit_code))
-            .await;
+        let out = format!("Task finished, exit code: {:?}", exit_code);
+
+        send_stdout(session, out.as_str()).await;
 
         if exit_code == 0 {
-            let _ = session.text("status: SUCCESS".to_string()).await;
+            send_status(session, "SUCCESS").await;
         } else {
-            let _ = session.text("status: FAILED".to_string()).await;
+            send_status(session, "FAILED").await;
         }
     } else {
-        let _ = session.text("status: FAILED".to_string()).await;
-        let _ = session.text("Error".to_string()).await;
+        send_status(session, "FAILED").await;
+        send_stdout(session, "Error").await;
     }
 
-    let mut slot = stdin_tx.lock().await;
-    *slot = None;
+    let mut state = stdin_state.lock().await;
+    state.tx = None;
+    state.pending.clear();
 }
 
 #[actix_web::get("/")]

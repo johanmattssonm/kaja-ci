@@ -69,6 +69,8 @@ dependencies = [
  "kaja-html-macro",
  "kaja-web",
  "kaja-web-component",
+ "serde",
+ "serde_json",
  "wasm-bindgen",
  "wasm-bindgen-futures",
  "web-sys",

@@ -1,8 +1,11 @@
+use crate::rest::{Action, ActionResponse};
+
 use super::color;
 use futures_channel::mpsc;
 use futures_util::{SinkExt, StreamExt};
 use gloo_net::websocket::{Message, futures::WebSocket};
 use kaja_web::prelude::*;
+use serde::Serialize;
 use wasm_bindgen::{JsCast, prelude::Closure};
 use wasm_bindgen_futures::spawn_local;
 use web_sys::HtmlInputElement;
@@ -107,9 +110,16 @@ async fn connect_console_view(id: String, action: &str, project: &str) {
 
     setup_stdin_handler(&id, input_tx.clone());
 
-    let project_action = format!("ACTION {} {}", action, project);
+    let project_action = Action {
+        action: action.to_string(),
+        folder: Some(project.to_string()),
+        command: Some("/home/johan/Downloads/resting-chair/test.sh".to_string()),
+        stdin: None,
+    };
 
-    if let Err(err) = input_tx.unbounded_send(project_action) {
+    let json_string = serde_json::to_string(&project_action).unwrap();
+
+    if let Err(err) = input_tx.unbounded_send(json_string) {
         log!("Failed to enqueue action message", format!("{err:?}"));
         return;
     }
@@ -157,9 +167,23 @@ fn setup_stdin_handler(id: &str, input_tx: mpsc::UnboundedSender<String>) {
         event.prevent_default();
 
         let value = keydown_input.value();
-        let action = format!("STDIN {}", value);
+        let action = Action {
+            action: "STDIN".to_string(),
+            command: None,
+            folder: None,
+            stdin: Some(value),
+        };
 
-        if keydown_tx.unbounded_send(action).is_err() {
+        let json = serde_json::to_string(&action);
+
+        if json.is_err() {
+            log!("Failed to create json action.");
+            return;
+        }
+
+        let json = json.unwrap();
+
+        if keydown_tx.unbounded_send(json).is_err() {
             log!("WebSocket for stdin channel is closed");
             return;
         }
@@ -187,19 +211,36 @@ fn process_build_output(id: &str, chunk: String) {
         }
     };
 
-    if chunk.starts_with("status: ") {
-        handle_status(&chunk);
+    let resp: std::result::Result<ActionResponse, _> = serde_json::from_str(&chunk);
+
+    if resp.is_err() {
+        log!("Invalid response", chunk);
         return;
     }
 
-    let plain_chunk = drop_pipe_name(chunk);
-    let rendered = color::append_ansi_chunk(id, &plain_chunk);
-    element.set_inner_html(&rendered);
-    element.set_scroll_top(element.scroll_height());
+    let resp = resp.unwrap();
+
+    if resp.status.is_some() {
+        handle_status(resp);
+        return;
+    }
+
+    if let Some(stdout) = resp.stdout {
+        let rendered = color::append_ansi_chunk(id, &stdout);
+        element.set_inner_html(&rendered);
+        element.set_scroll_top(element.scroll_height());
+    }
 }
 
-fn handle_status(line: &str) {
-    match line {
+fn handle_status(line: ActionResponse) {
+    if line.status.is_none() {
+        log!("No status");
+        return;
+    }
+
+    let status = line.status.unwrap();
+
+    match status.as_str() {
         "status: RUNNING" => {
             try_inner_text("#status", "Task: Running");
         }
@@ -210,22 +251,7 @@ fn handle_status(line: &str) {
             try_inner_text("#status", "Task Finished Succesfully");
         }
         _ => {
-            log!("Unknown status from runner:", line);
+            log!("Unknown status from runner:", status.as_str());
         }
     }
-}
-
-fn drop_pipe_name(line: String) -> String {
-    if line.starts_with("stderr: ") {
-        let sub = &line["stderr: ".len()..line.len()];
-        return sub.to_string();
-    } else if line.starts_with("stdout: ") {
-        let sub = &line["stdout: ".len()..line.len()];
-        return sub.to_string();
-    } else if line.starts_with("status: ") {
-        let sub = &line["status: ".len()..line.len()];
-        return sub.to_string();
-    }
-
-    line
 }
