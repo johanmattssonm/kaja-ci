@@ -4,7 +4,7 @@ use std::{cell::RefCell, collections::HashMap};
 struct AnsiRenderState {
     pending_escape: String,
     bold: bool,
-    fg_color: Option<&'static str>,
+    fg_class: Option<&'static str>,
     hyperlink: Option<String>,
     lines: Vec<String>,
     current_line: String,
@@ -96,24 +96,33 @@ fn ansi_to_html_streaming(input: &str, state: &mut AnsiRenderState) {
             }
             b']' => {
                 let mut j = i + 2;
-                let mut found_st = None;
-                while j + 1 < bytes.len() {
-                    if bytes[j] == 0x1b && bytes[j + 1] == b'\\' {
-                        found_st = Some(j);
+                let mut osc_end: Option<(usize, usize)> = None;
+
+                while j < bytes.len() {
+                    if bytes[j] == 0x07 {
+                        // BEL terminated OSC
+                        osc_end = Some((j, 1));
                         break;
                     }
+
+                    if j + 1 < bytes.len() && bytes[j] == 0x1b && bytes[j + 1] == b'\\' {
+                        // ST terminated OSC
+                        osc_end = Some((j, 2));
+                        break;
+                    }
+
                     j += 1;
                 }
 
-                let Some(st_idx) = found_st else {
+                let Some((end_idx, terminator_len)) = osc_end else {
                     state.pending_escape.push_str(&input[i..]);
                     return;
                 };
 
-                let osc_content = &input[i + 2..st_idx];
+                let osc_content = &input[i + 2..end_idx];
                 apply_osc(osc_content, state);
 
-                i = st_idx + 2;
+                i = end_idx + terminator_len;
                 text_start = i;
             }
             _ => {
@@ -150,7 +159,7 @@ fn ansi_to_html_streaming(input: &str, state: &mut AnsiRenderState) {
 fn apply_sgr(params: &str, state: &mut AnsiRenderState) {
     if params.is_empty() {
         state.bold = false;
-        state.fg_color = None;
+        state.fg_class = None;
         return;
     }
 
@@ -159,13 +168,13 @@ fn apply_sgr(params: &str, state: &mut AnsiRenderState) {
         match code {
             0 => {
                 state.bold = false;
-                state.fg_color = None;
+                state.fg_class = None;
             }
             1 => state.bold = true,
             22 => state.bold = false,
-            39 => state.fg_color = None,
+            39 => state.fg_class = None,
             30..=37 | 90..=97 => {
-                state.fg_color = sgr_fg_color(code);
+                state.fg_class = sgr_fg_class(code);
             }
             _ => {}
         }
@@ -182,24 +191,24 @@ fn apply_osc(osc_content: &str, state: &mut AnsiRenderState) {
     }
 }
 
-fn sgr_fg_color(code: u16) -> Option<&'static str> {
+fn sgr_fg_class(code: u16) -> Option<&'static str> {
     match code {
-        30 => Some("#000000"),
-        31 => Some("#aa0000"),
-        32 => Some("#00aa00"),
-        33 => Some("#aa5500"),
-        34 => Some("#3366ff"),
-        35 => Some("#aa00aa"),
-        36 => Some("#00aaaa"),
-        37 => Some("#aaaaaa"),
-        90 => Some("#555555"),
-        91 => Some("#ff5555"),
-        92 => Some("#55ff55"),
-        93 => Some("#ffff55"),
-        94 => Some("#5555ff"),
-        95 => Some("#ff55ff"),
-        96 => Some("#55ffff"),
-        97 => Some("#ffffff"),
+        30 => Some("terminal-fg-black"),
+        31 => Some("terminal-fg-red"),
+        32 => Some("terminal-fg-green"),
+        33 => Some("terminal-fg-yellow"),
+        34 => Some("terminal-fg-blue"),
+        35 => Some("terminal-fg-magenta"),
+        36 => Some("terminal-fg-cyan"),
+        37 => Some("terminal-fg-white"),
+        90 => Some("terminal-fg-bright-black"),
+        91 => Some("terminal-fg-bright-red"),
+        92 => Some("terminal-fg-bright-green"),
+        93 => Some("terminal-fg-bright-yellow"),
+        94 => Some("terminal-fg-bright-blue"),
+        95 => Some("terminal-fg-bright-magenta"),
+        96 => Some("terminal-fg-bright-cyan"),
+        97 => Some("terminal-fg-bright-white"),
         _ => None,
     }
 }
@@ -221,17 +230,19 @@ fn render_text(text: &str, state: &AnsiRenderState) -> String {
         html = format!(r#"<a href="{href}" target="_blank" rel="noopener noreferrer">{html}</a>"#);
     }
 
-    if state.bold || state.fg_color.is_some() {
-        let mut style = String::new();
+    if state.bold || state.fg_class.is_some() {
+        let mut classes = String::from("terminal-span");
+
         if state.bold {
-            style.push_str("font-weight:700;");
+            classes.push_str(" terminal-bold");
         }
-        if let Some(color) = state.fg_color {
-            style.push_str("color:");
-            style.push_str(color);
-            style.push(';');
+
+        if let Some(class_name) = state.fg_class {
+            classes.push(' ');
+            classes.push_str(class_name);
         }
-        html = format!(r#"<span style="{style}">{html}</span>"#);
+
+        html = format!(r#"<span class="{classes}">{html}</span>"#);
     }
 
     html
@@ -242,17 +253,29 @@ fn normalize_terminal_text(s: &str) -> String {
 
     for ch in s.chars() {
         match ch {
-            // Drop C0 control chars here; CR/LF are handled by append_text_with_controls.
-            '\u{0000}'..='\u{001F}' if ch != '\t' => {}
+            // Drop C0 control chars here.
+            // Keep tab/newline/carriage-return so screen rendering retains rows.
+            '\u{0000}'..='\u{001F}' if ch != '\t' && ch != '\n' && ch != '\r' => {}
             _ => out.push(ch),
         }
     }
 
-    out
+    strip_known_terminal_artifacts(&out)
 }
 
 pub fn render_terminal_screen(screen: &str) -> String {
-    escape_html(screen)
+    let sanitized = sanitize_screen_text(screen);
+    let mut out = String::new();
+
+    for (row_idx, line) in sanitized.split('\n').enumerate() {
+        if row_idx > 0 {
+            out.push('\n');
+        }
+
+        out.push_str(&render_screen_line_with_shortcuts(line));
+    }
+
+    out
 }
 
 pub fn render_terminal_screen_with_cursor(
@@ -260,24 +283,23 @@ pub fn render_terminal_screen_with_cursor(
     cursor_row: usize,
     cursor_col: usize,
 ) -> String {
+    let sanitized = sanitize_screen_text(screen);
     let mut out = String::new();
 
-    for (row_idx, line) in screen.split('\n').enumerate() {
+    for (row_idx, line) in sanitized.split('\n').enumerate() {
         if row_idx > 0 {
             out.push('\n');
         }
 
         if row_idx != cursor_row {
-            out.push_str(&escape_html(line));
+            out.push_str(&render_screen_line_with_shortcuts(line));
             continue;
         }
 
         let chars: Vec<char> = line.chars().collect();
 
         if chars.is_empty() {
-            out.push_str(
-                r#"<span style=\"background: currentColor; color: transparent;\">&nbsp;</span>"#,
-            );
+            out.push_str(r#"<span class="terminal-cursor">&nbsp;</span>"#);
             continue;
         }
 
@@ -287,16 +309,245 @@ pub fn render_terminal_screen_with_cursor(
         let cur = chars[clamped_col];
         let after: String = chars.iter().skip(clamped_col + 1).collect();
 
-        out.push_str(&escape_html(&before));
-        out.push_str(
-            r#"<span style=\"background: currentColor; color: var(--background-color, #000);\">"#,
-        );
+        out.push_str(&render_screen_line_with_shortcuts(&before));
+        out.push_str(r#"<span class="terminal-cursor">"#);
         out.push_str(&escape_html(&cur.to_string()));
         out.push_str("</span>");
-        out.push_str(&escape_html(&after));
+        out.push_str(&render_screen_line_with_shortcuts(&after));
     }
 
     out
+}
+
+fn sanitize_screen_text(screen: &str) -> String {
+    let without_osc = strip_esc_sequences(screen);
+    normalize_terminal_text(&without_osc)
+}
+
+fn render_screen_line_with_shortcuts(line: &str) -> String {
+    let chars: Vec<char> = line.chars().collect();
+    let mut out = String::new();
+    let mut i = 0usize;
+
+    while i < chars.len() {
+        if is_control_shortcut_start(&chars, i) {
+            out.push_str(r#"<span class="terminal-inverse">^"#);
+            out.push(chars[i + 1]);
+            out.push_str("</span>");
+            i += 2;
+            continue;
+        }
+
+        push_escaped_char(&mut out, chars[i]);
+        i += 1;
+    }
+
+    out
+}
+
+fn is_control_shortcut_start(chars: &[char], idx: usize) -> bool {
+    if idx + 1 >= chars.len() || chars[idx] != '^' {
+        return false;
+    }
+
+    let key = chars[idx + 1];
+    if !key.is_ascii_uppercase() {
+        return false;
+    }
+
+    let prev_ok = if idx == 0 {
+        true
+    } else {
+        let prev = chars[idx - 1];
+        prev.is_whitespace() || prev == '(' || prev == '[' || prev == '{'
+    };
+
+    let next_ok = if idx + 2 >= chars.len() {
+        true
+    } else {
+        chars[idx + 2].is_whitespace()
+    };
+
+    prev_ok && next_ok
+}
+
+fn push_escaped_char(out: &mut String, ch: char) {
+    match ch {
+        '&' => out.push_str("&amp;"),
+        '<' => out.push_str("&lt;"),
+        '>' => out.push_str("&gt;"),
+        '"' => out.push_str("&quot;"),
+        '\'' => out.push_str("&#39;"),
+        _ => out.push(ch),
+    }
+}
+
+fn strip_esc_sequences(input: &str) -> String {
+    let bytes = input.as_bytes();
+    let mut out = Vec::with_capacity(bytes.len());
+    let mut i = 0usize;
+
+    while i < bytes.len() {
+        if bytes[i] != 0x1b {
+            out.push(bytes[i]);
+            i += 1;
+            continue;
+        }
+
+        if i + 1 >= bytes.len() {
+            break;
+        }
+
+        match bytes[i + 1] {
+            b']' => {
+                let mut j = i + 2;
+                let mut found = false;
+
+                while j < bytes.len() {
+                    if bytes[j] == 0x07 {
+                        i = j + 1;
+                        found = true;
+                        break;
+                    }
+
+                    if j + 1 < bytes.len() && bytes[j] == 0x1b && bytes[j + 1] == b'\\' {
+                        i = j + 2;
+                        found = true;
+                        break;
+                    }
+
+                    j += 1;
+                }
+
+                if !found {
+                    break;
+                }
+            }
+            b'[' => {
+                let mut j = i + 2;
+                while j < bytes.len() {
+                    if (0x40..=0x7e).contains(&bytes[j]) {
+                        break;
+                    }
+                    j += 1;
+                }
+
+                if j >= bytes.len() {
+                    break;
+                }
+
+                i = j + 1;
+            }
+            _ => {
+                let mut j = i + 1;
+                while j < bytes.len() && (0x20..=0x2f).contains(&bytes[j]) {
+                    j += 1;
+                }
+
+                if j < bytes.len() && (0x30..=0x7e).contains(&bytes[j]) {
+                    i = j + 1;
+                } else {
+                    i += 1;
+                }
+            }
+        }
+    }
+
+    String::from_utf8_lossy(&out).into_owned()
+}
+
+fn strip_known_terminal_artifacts(input: &str) -> String {
+    let bytes = input.as_bytes();
+    let mut out = Vec::with_capacity(bytes.len());
+    let mut i = 0usize;
+
+    while i < bytes.len() {
+        if starts_with_at(bytes, i, b"666;vte.shell.postexec=") {
+            i += b"666;vte.shell.postexec=".len();
+            while i < bytes.len() && bytes[i].is_ascii_digit() {
+                i += 1;
+            }
+            continue;
+        }
+
+        if starts_with_at(bytes, i, b"666;vte.shell.precmd!") {
+            i += b"666;vte.shell.precmd!".len();
+            continue;
+        }
+
+        if starts_with_at(bytes, i, b"666;vte.shell.preexec!") {
+            i += b"666;vte.shell.preexec!".len();
+            continue;
+        }
+
+        if starts_with_at(bytes, i, b"7;file://") {
+            i = skip_prompt_metadata_fragment(bytes, i);
+            continue;
+        }
+
+        if starts_with_at(bytes, i, b"0;") && looks_like_title_fragment(bytes, i) {
+            i = skip_prompt_metadata_fragment(bytes, i);
+            continue;
+        }
+
+        out.push(bytes[i]);
+        i += 1;
+    }
+
+    String::from_utf8_lossy(&out).into_owned()
+}
+
+fn skip_prompt_metadata_fragment(bytes: &[u8], start: usize) -> usize {
+    let mut i = start;
+
+    while i < bytes.len() {
+        let b = bytes[i];
+
+        if b == b'\n' || b == b'\r' || b == 0x1b || b == 0x07 {
+            break;
+        }
+
+        if i > start
+            && (starts_with_at(bytes, i, b"666;vte.shell.") || starts_with_at(bytes, i, b"0;"))
+        {
+            break;
+        }
+
+        i += 1;
+    }
+
+    i
+}
+
+fn looks_like_title_fragment(bytes: &[u8], start: usize) -> bool {
+    let mut i = start + 2;
+    let mut has_at = false;
+    let mut has_colon = false;
+    let limit = (start + 160).min(bytes.len());
+
+    while i < limit {
+        let b = bytes[i];
+        if b == b'\n' || b == b'\r' || b == 0x1b || b == 0x07 {
+            break;
+        }
+        if b == b'@' {
+            has_at = true;
+        } else if b == b':' {
+            has_colon = true;
+        }
+
+        if i > start && starts_with_at(bytes, i, b"666;vte.shell.") {
+            break;
+        }
+
+        i += 1;
+    }
+
+    has_at && has_colon
+}
+
+fn starts_with_at(haystack: &[u8], idx: usize, needle: &[u8]) -> bool {
+    idx + needle.len() <= haystack.len() && &haystack[idx..idx + needle.len()] == needle
 }
 
 fn escape_html(s: &str) -> String {
@@ -431,5 +682,46 @@ mod tests {
         let mut state = AnsiRenderState::default();
         ansi_to_html_streaming("Step 1\u{1b}[2K\rStep 2", &mut state);
         assert_eq!(render_buffer(&state), "Step 2");
+    }
+
+    #[test]
+    fn osc_bel_is_consumed_without_leaking_payload() {
+        let mut state = AnsiRenderState::default();
+        ansi_to_html_streaming("A\u{1b}]666;vte.shell.precmd!\u{7}B", &mut state);
+        assert_eq!(render_buffer(&state), "AB");
+    }
+
+    #[test]
+    fn leaked_vte_fragments_are_removed_from_plain_screen_text() {
+        let sample = "666;vte.shell.postexec=07;file://summerbird/home/johan/Downloads/resting-chair0;\njohan@summerbird:~/Downloads/resting-chair666;vte.shell.precmd!";
+        let rendered = render_terminal_screen(sample);
+
+        assert!(!rendered.contains("666;vte.shell"));
+        assert!(!rendered.contains("7;file://"));
+        assert!(rendered.contains("johan@summerbird:~/Downloads/resting-chair"));
+    }
+
+    #[test]
+    fn sgr_wraps_text_in_css_classes() {
+        let mut state = AnsiRenderState::default();
+        ansi_to_html_streaming("\u{1b}[1;31merror\u{1b}[0m", &mut state);
+        let out = render_buffer(&state);
+
+        assert!(out.contains("terminal-bold"));
+        assert!(out.contains("terminal-fg-red"));
+    }
+
+    #[test]
+    fn nano_style_control_shortcuts_are_rendered_in_inverse_spans() {
+        let rendered = render_terminal_screen("^X Exit  ^O WriteOut");
+
+        assert!(rendered.contains("<span class=\"terminal-inverse\">^X</span> Exit"));
+        assert!(rendered.contains("<span class=\"terminal-inverse\">^O</span> WriteOut"));
+    }
+
+    #[test]
+    fn caret_sequences_inside_words_are_not_forced_to_inverse() {
+        let rendered = render_terminal_screen("token^Xvalue");
+        assert!(!rendered.contains("terminal-inverse"));
     }
 }

@@ -79,9 +79,56 @@ impl ConsoleComponent {
         let project: String = self.get_attribute("project").unwrap_or_default();
 
         let content = html! {{
+            <style>
+                .terminal-output {
+                    white-space: pre;
+                    tab-size: 8;
+                    line-height: 1.35;
+                    background: #07090d;
+                    color: #e6edf3;
+                    border: 1px solid #2f3845;
+                    border-radius: 8px;
+                    padding: 14px;
+                    min-height: 360px;
+                    max-height: 70vh;
+                    overflow: auto;
+                }
+
+                .terminal-span { white-space: pre; }
+                .terminal-bold { font-weight: 700; }
+
+                .terminal-fg-black { color: #0b0b0b; }
+                .terminal-fg-red { color: #ff7b72; }
+                .terminal-fg-green { color: #3fb950; }
+                .terminal-fg-yellow { color: #d29922; }
+                .terminal-fg-blue { color: #79c0ff; }
+                .terminal-fg-magenta { color: #bc8cff; }
+                .terminal-fg-cyan { color: #76e3ea; }
+                .terminal-fg-white { color: #f0f6fc; }
+
+                .terminal-fg-bright-black { color: #8b949e; }
+                .terminal-fg-bright-red { color: #ffa198; }
+                .terminal-fg-bright-green { color: #56d364; }
+                .terminal-fg-bright-yellow { color: #e3b341; }
+                .terminal-fg-bright-blue { color: #a5d6ff; }
+                .terminal-fg-bright-magenta { color: #d2a8ff; }
+                .terminal-fg-bright-cyan { color: #8be9fd; }
+                .terminal-fg-bright-white { color: #ffffff; }
+
+                .terminal-cursor {
+                    background: #e6edf3;
+                    color: #0d1117;
+                }
+
+                .terminal-inverse {
+                    background: #e6edf3;
+                    color: #0d1117;
+                    font-weight: 700;
+                }
+            </style>
             <h1 id="status">Loading</h1>
             <p>Project Folder: $(project)</p>
-            <pre id="$(id)-output" tabindex="0"></pre>
+            <pre id="$(id)-output" class="terminal-output" tabindex="0"></pre>
             <input id="$(id)-stdin" placeholder="Type input and press Enter">
         }};
 

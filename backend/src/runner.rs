@@ -35,6 +35,8 @@ struct BuildInputState {
 enum EscapeState {
     Esc,
     Csi,
+    Osc,
+    EscIntermediate,
 }
 
 struct TerminalScreen {
@@ -46,6 +48,7 @@ struct TerminalScreen {
     saved_cursor: Option<(usize, usize)>,
     escape_state: Option<EscapeState>,
     csi_params: String,
+    osc_esc_pending: bool,
     scroll_top: usize,
     scroll_bottom: usize,
 }
@@ -61,6 +64,7 @@ impl TerminalScreen {
             saved_cursor: None,
             escape_state: None,
             csi_params: String::new(),
+            osc_esc_pending: false,
             scroll_top: 0,
             scroll_bottom: rows.saturating_sub(1),
         }
@@ -79,6 +83,10 @@ impl TerminalScreen {
                     self.escape_state = Some(EscapeState::Csi);
                     self.csi_params.clear();
                 }
+                b']' => {
+                    self.escape_state = Some(EscapeState::Osc);
+                    self.osc_esc_pending = false;
+                }
                 b'7' => {
                     self.saved_cursor = Some((self.cursor_row, self.cursor_col));
                     self.escape_state = None;
@@ -94,6 +102,12 @@ impl TerminalScreen {
                     self.reverse_index();
                     self.escape_state = None;
                 }
+                b if (0x20..=0x2f).contains(&b) => {
+                    self.escape_state = Some(EscapeState::EscIntermediate);
+                }
+                b if (0x30..=0x7e).contains(&b) => {
+                    self.escape_state = None;
+                }
                 _ => {
                     self.escape_state = None;
                 }
@@ -107,6 +121,32 @@ impl TerminalScreen {
                     self.escape_state = None;
                 } else {
                     self.csi_params.push(b as char);
+                }
+            }
+            Some(EscapeState::Osc) => {
+                if self.osc_esc_pending {
+                    if b == b'\\' {
+                        self.escape_state = None;
+                    }
+                    self.osc_esc_pending = false;
+                    return;
+                }
+
+                match b {
+                    0x07 => {
+                        // BEL terminator
+                        self.escape_state = None;
+                    }
+                    0x1b => {
+                        // Possible ST terminator: ESC \
+                        self.osc_esc_pending = true;
+                    }
+                    _ => {}
+                }
+            }
+            Some(EscapeState::EscIntermediate) => {
+                if (0x30..=0x7e).contains(&b) {
+                    self.escape_state = None;
                 }
             }
             None => match b {
@@ -538,6 +578,31 @@ fn parse_cup(params: &str) -> (usize, usize) {
         .unwrap_or(0);
 
     (row, col)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn esc_charset_designation_is_consumed() {
+        let mut screen = TerminalScreen::new(1, 32);
+        screen.feed("\u{1b}(B^X Exit");
+        let text = screen.to_text();
+
+        assert!(!text.contains("B^X Exit"));
+        assert!(text.contains("^X Exit"));
+    }
+
+    #[test]
+    fn osc_payload_is_consumed() {
+        let mut screen = TerminalScreen::new(1, 64);
+        screen.feed("A\u{1b}]666;vte.shell.precmd!\u{7}B");
+        let text = screen.to_text();
+
+        assert!(text.starts_with("AB"));
+        assert!(!text.contains("666;vte.shell"));
+    }
 }
 
 pub async fn websocket(
