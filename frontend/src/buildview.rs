@@ -5,7 +5,6 @@ use futures_channel::mpsc;
 use futures_util::{SinkExt, StreamExt};
 use gloo_net::websocket::{Message, futures::WebSocket};
 use kaja_web::prelude::*;
-use serde::Serialize;
 use wasm_bindgen::{JsCast, prelude::Closure};
 use wasm_bindgen_futures::spawn_local;
 use web_sys::HtmlInputElement;
