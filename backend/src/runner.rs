@@ -15,7 +15,7 @@ use tokio::sync::{Mutex, mpsc};
 mod rest;
 
 use crate::{APP_DATA, Task};
-use rest::{Action, ActionResponse};
+use rest::{Action, ActionResponse, BuildCommands};
 
 pub const BUILD_DIR: &str = "/home/johan/Downloads/resting-chair";
 
@@ -205,32 +205,53 @@ async fn process_std_in(action: Action, stdin_state: Arc<Mutex<BuildInputState>>
 fn command_to_executable(action: &Action) -> Option<CommandBuilder> {
     let folder = action.folder.as_deref()?;
 
-    match action.action.as_str() {
-        "build" => {
-            let program = match action.command.as_deref() {
-                Some(program) => program,
-                None => {
-                    println!("Missing command for build action");
-                    return None;
-                }
-            };
+    let mut project_dir = PathBuf::from(folder);
+    project_dir.push("ci.json");
 
-            let mut cmd = CommandBuilder::new(program);
-            cmd.cwd(folder);
-            Some(cmd)
+    let config_string = match std::fs::read_to_string(&project_dir) {
+        Ok(contents) => contents,
+        Err(err) => {
+            println!("Failed to read {}: {err}", project_dir.display());
+            return None;
         }
-        "fetch" => {
-            let mut cmd = CommandBuilder::new("git");
-            cmd.arg("fetch");
-            cmd.arg("--all");
-            cmd.cwd(folder);
-            Some(cmd)
+    };
+
+    let config_commands: BuildCommands = match serde_json::from_str(&config_string) {
+        Ok(config) => config,
+        Err(err) => {
+            println!("Failed to parse {}: {err}", project_dir.display());
+            return None;
         }
+    };
+
+    match action.action.as_str() {
+        "build" => parse_command(config_commands.build, folder).ok(),
+        "fetch" => parse_command(config_commands.git, folder).ok(),
+        "test" => parse_command(config_commands.test, folder).ok(),
+        "release" => parse_command(config_commands.release, folder).ok(),
+        "clean" => parse_command(config_commands.clean, folder).ok(),
         _ => {
             println!("Unknown action {}", action.action);
             None
         }
     }
+}
+
+fn parse_command(command: Option<String>, folder: &str) -> Result<CommandBuilder, String> {
+    let command = command.ok_or_else(|| "No command".to_string())?;
+
+    let parts = shell_words::split(&command).map_err(|e| e.to_string())?;
+    let (program, args) = parts
+        .split_first()
+        .ok_or_else(|| "Empty command".to_string())?;
+    let mut cmd = CommandBuilder::new(program);
+
+    for arg in args {
+        cmd.arg(arg);
+    }
+
+    cmd.cwd(folder);
+    Ok(cmd)
 }
 
 async fn regiter_process(action: &Action, process: Arc<StdRwLock<Box<dyn Child + Send + Sync>>>) {

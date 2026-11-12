@@ -9,10 +9,13 @@ use tokio::sync::RwLock;
 
 mod abort;
 mod build;
+mod clean;
 mod fetch;
 mod index;
+mod release;
 mod runner;
 mod settings;
+mod test;
 
 pub struct AppData {
     tasks: HashMap<String, Task>,
@@ -44,6 +47,9 @@ async fn main() -> std::io::Result<()> {
             .service(settings::save_settings)
             .service(settings::load_settings)
             .service(abort::abort)
+            .service(test::test)
+            .service(release::release)
+            .service(clean::clean)
             .route("/ws", web::get().to(runner::websocket))
     })
     .bind(("127.0.0.1", 2003))?
