@@ -5,11 +5,44 @@
 body {
     margin: 0;
     min-height: 100vh;
-    padding: 24px;
+    padding: 16px 24px 24px;
     background: #1f1f1f;
     color: #e7e7e7;
     font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
     line-height: 1.45;
+}
+
+.top-bar {
+    width: min(960px, 100%);
+    margin: 0 auto 16px;
+    display: flex;
+    align-items: center;
+    padding: 10px 14px;
+    border: 1px solid #3b3b3b;
+    border-radius: 10px;
+    background: linear-gradient(180deg, #2b2b2b 0%, #212121 100%);
+    box-shadow: 0 4px 14px rgba(0, 0, 0, 0.28);
+}
+
+.top-bar-link,
+.top-bar-link:link,
+.top-bar-link:visited {
+    display: inline-block;
+    color: #d8eaff;
+    text-decoration: none;
+    font-weight: 700;
+    letter-spacing: 0.02em;
+    padding: 6px 10px;
+    border-radius: 6px;
+    border: 1px solid transparent;
+    transition: background-color 120ms ease, border-color 120ms ease, color 120ms ease;
+}
+
+.top-bar-link:hover,
+.top-bar-link:active {
+    background: #30343a;
+    border-color: #4b5a70;
+    color: #ffffff;
 }
 
 main,
