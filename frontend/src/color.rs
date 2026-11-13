@@ -93,6 +93,7 @@ fn ansi_to_html_streaming(input: &str, state: &mut AnsiRenderState) {
                     b'K' => apply_erase_in_line(params, state),
                     b'D' => apply_cursor_left(params, state),
                     b'C' => apply_cursor_right(params, state),
+                    b'P' => apply_delete_chars(params, state),
                     _ => {}
                 }
 
@@ -685,6 +686,17 @@ fn apply_cursor_right(params: &str, state: &mut AnsiRenderState) {
     state.cursor_col = (state.cursor_col + n).min(state.current_line_cells.len());
 }
 
+fn apply_delete_chars(params: &str, state: &mut AnsiRenderState) {
+    let n = parse_cursor_n(params);
+
+    if state.cursor_col >= state.current_line_cells.len() {
+        return;
+    }
+
+    let end = (state.cursor_col + n).min(state.current_line_cells.len());
+    state.current_line_cells.drain(state.cursor_col..end);
+}
+
 fn parse_cursor_n(params: &str) -> usize {
     if params.is_empty() {
         return 1;
@@ -766,6 +778,15 @@ mod tests {
         let mut state = AnsiRenderState::default();
         ansi_to_html_streaming("abcd\u{1b}[D", &mut state);
         assert_eq!(render_buffer(&state), "abcd");
+    }
+
+    #[test]
+    fn delete_char_at_cursor_shifts_tail_left() {
+        let mut state = AnsiRenderState::default();
+        // Simulate: type abcd, move cursor left once (before d), backspace,
+        // then terminal sends DCH to delete at cursor.
+        ansi_to_html_streaming("abcd\u{1b}[D\u{0008}\u{1b}[P", &mut state);
+        assert_eq!(render_buffer(&state), "abd");
     }
 
     #[test]
