@@ -9,7 +9,7 @@ struct AnsiRenderState {
     hyperlink: Option<String>,
     lines: Vec<String>,
     current_line_cells: Vec<String>,
-    carriage_return_pending: bool,
+    cursor_col: usize,
 }
 
 thread_local! {
@@ -91,6 +91,8 @@ fn ansi_to_html_streaming(input: &str, state: &mut AnsiRenderState) {
                 match final_byte {
                     b'm' => apply_sgr(params, state),
                     b'K' => apply_erase_in_line(params, state),
+                    b'D' => apply_cursor_left(params, state),
+                    b'C' => apply_cursor_right(params, state),
                     _ => {}
                 }
 
@@ -613,9 +615,7 @@ fn append_text_with_controls(text: &str, state: &mut AnsiRenderState) {
             '\r' => {
                 flush_text_run(&run, state);
                 run.clear();
-                // CR moves cursor to start of line; do not clear yet.
-                // The next printable text should replace from column 0.
-                state.carriage_return_pending = true;
+                state.cursor_col = 0;
             }
             '\n' => {
                 flush_text_run(&run, state);
@@ -623,14 +623,13 @@ fn append_text_with_controls(text: &str, state: &mut AnsiRenderState) {
                 let rendered_line = state.current_line_cells.join("");
                 state.lines.push(rendered_line);
                 state.current_line_cells.clear();
-                state.carriage_return_pending = false;
+                state.cursor_col = 0;
             }
             '\u{0008}' => {
-                // Backspace should immediately remove one visible character,
-                // including already-flushed output in the current line.
+                // BS moves the cursor left by one cell; it should not delete by itself.
                 flush_text_run(&run, state);
                 run.clear();
-                state.current_line_cells.pop();
+                state.cursor_col = state.cursor_col.saturating_sub(1);
             }
             _ => run.push(ch),
         }
@@ -644,16 +643,19 @@ fn flush_text_run(run: &str, state: &mut AnsiRenderState) {
         return;
     }
 
-    if state.carriage_return_pending {
-        state.current_line_cells.clear();
-        state.carriage_return_pending = false;
-    }
-
     for ch in run.chars() {
         let rendered = render_text(&ch.to_string(), state);
-        if !rendered.is_empty() {
+        if rendered.is_empty() {
+            continue;
+        }
+
+        if state.cursor_col < state.current_line_cells.len() {
+            state.current_line_cells[state.cursor_col] = rendered;
+        } else {
             state.current_line_cells.push(rendered);
         }
+
+        state.cursor_col += 1;
     }
 }
 
@@ -661,18 +663,34 @@ fn apply_erase_in_line(params: &str, state: &mut AnsiRenderState) {
     // EL (Erase in Line):
     // - ESC[K / ESC[0K => clear from cursor to end of line
     // - ESC[2K          => clear entire line
-    //
-    // In our streaming renderer we don't keep an exact cursor position for STDOUT mode.
-    // Treating mode 0 as "clear whole line" causes backspace-driven redraws to wipe
-    // the full input line. So we only hard-clear on mode 2, and leave mode 0 as a no-op.
     match params {
+        "" | "0" => {
+            state.current_line_cells.truncate(state.cursor_col);
+        }
         "2" => {
             state.current_line_cells.clear();
-            state.carriage_return_pending = false;
+            state.cursor_col = 0;
         }
-        "" | "0" => {}
         _ => {}
     }
+}
+
+fn apply_cursor_left(params: &str, state: &mut AnsiRenderState) {
+    let n = parse_cursor_n(params);
+    state.cursor_col = state.cursor_col.saturating_sub(n);
+}
+
+fn apply_cursor_right(params: &str, state: &mut AnsiRenderState) {
+    let n = parse_cursor_n(params);
+    state.cursor_col = (state.cursor_col + n).min(state.current_line_cells.len());
+}
+
+fn parse_cursor_n(params: &str) -> usize {
+    if params.is_empty() {
+        return 1;
+    }
+
+    params.parse::<usize>().ok().filter(|n| *n > 0).unwrap_or(1)
 }
 
 #[cfg(test)]
@@ -734,6 +752,20 @@ mod tests {
         let mut state = AnsiRenderState::default();
         ansi_to_html_streaming("hello\u{0008}\u{1b}[K", &mut state);
         assert_eq!(render_buffer(&state), "hell");
+    }
+
+    #[test]
+    fn backspace_without_erase_only_moves_cursor() {
+        let mut state = AnsiRenderState::default();
+        ansi_to_html_streaming("hello\u{0008}", &mut state);
+        assert_eq!(render_buffer(&state), "hello");
+    }
+
+    #[test]
+    fn csi_cursor_left_does_not_delete_character() {
+        let mut state = AnsiRenderState::default();
+        ansi_to_html_streaming("abcd\u{1b}[D", &mut state);
+        assert_eq!(render_buffer(&state), "abcd");
     }
 
     #[test]
