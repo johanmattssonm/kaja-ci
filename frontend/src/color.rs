@@ -22,7 +22,7 @@ pub fn clear_render_state(id: &str) {
     });
 }
 
-pub fn append_ansi_chunk(id: &str, chunk: &str) -> String {
+pub fn append_ansi_chunk(id: &str, chunk: &str, cursor_col: Option<usize>) -> String {
     RENDER_STATES.with(|states| {
         let mut states = states.borrow_mut();
         let state = states.entry(id.to_string()).or_default();
@@ -32,7 +32,13 @@ pub fn append_ansi_chunk(id: &str, chunk: &str) -> String {
         state.pending_escape.clear();
 
         ansi_to_html_streaming(&input, state);
-        render_buffer(state)
+
+        if let Some(col) = cursor_col {
+            state.cursor_col = col;
+            render_buffer_with_caret(state)
+        } else {
+            render_buffer(state)
+        }
     })
 }
 
@@ -46,6 +52,55 @@ fn render_buffer(state: &AnsiRenderState) -> String {
     let mut out = state.lines.join("\n");
     out.push('\n');
     out.push_str(&current_line);
+    out
+}
+
+fn render_buffer_with_caret(state: &AnsiRenderState) -> String {
+    let current_line = render_line_with_caret(&state.current_line_cells, state.cursor_col);
+
+    if state.lines.is_empty() {
+        return current_line;
+    }
+
+    let mut out = state.lines.join("\n");
+    out.push('\n');
+    out.push_str(&current_line);
+    out
+}
+
+fn render_line_with_caret(cells: &[String], cursor_col: usize) -> String {
+    if cells.is_empty() {
+        let mut out = String::new();
+        if cursor_col > 0 {
+            out.push_str(&" ".repeat(cursor_col));
+        }
+        out.push_str(r#"<span class="terminal-caret">&nbsp;</span>"#);
+        return out;
+    }
+
+    if cursor_col >= cells.len() {
+        let mut out = cells.join("");
+        if cursor_col > cells.len() {
+            out.push_str(&" ".repeat(cursor_col - cells.len()));
+        }
+        out.push_str(r#"<span class="terminal-caret">&nbsp;</span>"#);
+        return out;
+    }
+
+    let mut out = String::new();
+
+    for cell in cells.iter().take(cursor_col) {
+        out.push_str(cell);
+    }
+
+    out.push_str(r#"<span class="terminal-caret">"#);
+    out.push_str(&cells[cursor_col]);
+    out.push_str("</span>");
+
+    for cell in cells.iter().skip(cursor_col + 1) {
+        out.push_str(cell);
+    }
+
     out
 }
 
@@ -338,7 +393,7 @@ pub fn render_terminal_screen_with_cursor(
         let chars: Vec<char> = line.chars().collect();
 
         if chars.is_empty() {
-            out.push_str(r#"<span class="terminal-cursor">&nbsp;</span>"#);
+            out.push_str(r#"<span class="terminal-caret">&nbsp;</span>"#);
             continue;
         }
 
@@ -349,7 +404,7 @@ pub fn render_terminal_screen_with_cursor(
         let after: String = chars.iter().skip(clamped_col + 1).collect();
 
         out.push_str(&render_screen_line_with_shortcuts(&before));
-        out.push_str(r#"<span class="terminal-cursor">"#);
+        out.push_str(r#"<span class="terminal-caret">"#);
         out.push_str(&escape_html(&cur.to_string()));
         out.push_str("</span>");
         out.push_str(&render_screen_line_with_shortcuts(&after));

@@ -1031,22 +1031,22 @@ async fn start_build(
     std::thread::spawn(move || {
         let mut reader = reader;
         let mut buf = [0_u8; 4096];
-        let mut screen = TerminalScreen::new(rows as usize, cols as usize);
+        let mut state = TerminalScreen::new(rows as usize, cols as usize);
 
         loop {
             match reader.read(&mut buf) {
                 Ok(0) => break,
                 Ok(n) => {
                     let chunk = String::from_utf8_lossy(&buf[..n]).to_string();
-                    screen.feed(&chunk);
+                    state.feed(&chunk);
 
-                    let action = if screen.in_alternate_screen() {
+                    let action = if state.in_alternate_screen() {
                         ActionResponse {
-                            stdout: Some(screen.to_text()),
+                            stdout: Some(state.to_text()),
                             action: "SCREEN".to_string(),
                             status: None,
-                            cursor_row: Some(screen.cursor_row),
-                            cursor_col: Some(screen.cursor_col),
+                            cursor_row: Some(state.cursor_row),
+                            cursor_col: Some(state.cursor_col),
                         }
                     } else {
                         ActionResponse {
@@ -1054,7 +1054,7 @@ async fn start_build(
                             action: "STDOUT".to_string(),
                             status: None,
                             cursor_row: None,
-                            cursor_col: None,
+                            cursor_col: Some(state.cursor_col),
                         }
                     };
 

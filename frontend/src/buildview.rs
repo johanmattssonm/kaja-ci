@@ -184,7 +184,7 @@ impl ConsoleComponent {
                 .terminal-bg-bright-cyan { background: #0e7490; }
                 .terminal-bg-bright-white { background: #f8fafc; color: #0f172a; }
 
-                .terminal-cursor {
+                .terminal-caret {
                     background: #e6edf3;
                     color: #0d1117;
                 }
@@ -408,7 +408,7 @@ fn process_build_output(id: &str, chunk: String) {
 
         element.set_class_name("terminal-output");
 
-        let rendered = color::append_ansi_chunk(id, &stdout);
+        let rendered = color::append_ansi_chunk(id, &stdout, resp.cursor_col);
         element.set_inner_html(&rendered);
         element.set_scroll_top(element.scroll_height());
     }
