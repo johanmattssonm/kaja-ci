@@ -8,7 +8,7 @@ struct AnsiRenderState {
     bg_class: Option<&'static str>,
     hyperlink: Option<String>,
     lines: Vec<String>,
-    current_line: String,
+    current_line_cells: Vec<String>,
     carriage_return_pending: bool,
 }
 
@@ -37,13 +37,15 @@ pub fn append_ansi_chunk(id: &str, chunk: &str) -> String {
 }
 
 fn render_buffer(state: &AnsiRenderState) -> String {
+    let current_line = state.current_line_cells.join("");
+
     if state.lines.is_empty() {
-        return state.current_line.clone();
+        return current_line;
     }
 
     let mut out = state.lines.join("\n");
     out.push('\n');
-    out.push_str(&state.current_line);
+    out.push_str(&current_line);
     out
 }
 
@@ -618,13 +620,17 @@ fn append_text_with_controls(text: &str, state: &mut AnsiRenderState) {
             '\n' => {
                 flush_text_run(&run, state);
                 run.clear();
-                state.lines.push(state.current_line.clone());
-                state.current_line.clear();
+                let rendered_line = state.current_line_cells.join("");
+                state.lines.push(rendered_line);
+                state.current_line_cells.clear();
                 state.carriage_return_pending = false;
             }
             '\u{0008}' => {
-                // Best-effort handling: drop from the unflushed run.
-                run.pop();
+                // Backspace should immediately remove one visible character,
+                // including already-flushed output in the current line.
+                flush_text_run(&run, state);
+                run.clear();
+                state.current_line_cells.pop();
             }
             _ => run.push(ch),
         }
@@ -638,28 +644,33 @@ fn flush_text_run(run: &str, state: &mut AnsiRenderState) {
         return;
     }
 
-    let rendered = render_text(run, state);
-    if rendered.is_empty() {
-        return;
-    }
-
     if state.carriage_return_pending {
-        state.current_line.clear();
+        state.current_line_cells.clear();
         state.carriage_return_pending = false;
     }
 
-    state.current_line.push_str(&rendered);
+    for ch in run.chars() {
+        let rendered = render_text(&ch.to_string(), state);
+        if !rendered.is_empty() {
+            state.current_line_cells.push(rendered);
+        }
+    }
 }
 
 fn apply_erase_in_line(params: &str, state: &mut AnsiRenderState) {
-    // Common progress-meter sequence is ESC[2K (erase whole line).
-    // We also treat empty and "0" as clear-to-end; with our cursor model at line end,
-    // both effectively clear the current line.
+    // EL (Erase in Line):
+    // - ESC[K / ESC[0K => clear from cursor to end of line
+    // - ESC[2K          => clear entire line
+    //
+    // In our streaming renderer we don't keep an exact cursor position for STDOUT mode.
+    // Treating mode 0 as "clear whole line" causes backspace-driven redraws to wipe
+    // the full input line. So we only hard-clear on mode 2, and leave mode 0 as a no-op.
     match params {
-        "" | "0" | "2" => {
-            state.current_line.clear();
+        "2" => {
+            state.current_line_cells.clear();
             state.carriage_return_pending = false;
         }
+        "" | "0" => {}
         _ => {}
     }
 }
@@ -716,6 +727,13 @@ mod tests {
         let mut state = AnsiRenderState::default();
         ansi_to_html_streaming("Step 1\u{1b}[2K\rStep 2", &mut state);
         assert_eq!(render_buffer(&state), "Step 2");
+    }
+
+    #[test]
+    fn backspace_with_erase_to_eol_does_not_clear_whole_line() {
+        let mut state = AnsiRenderState::default();
+        ansi_to_html_streaming("hello\u{0008}\u{1b}[K", &mut state);
+        assert_eq!(render_buffer(&state), "hell");
     }
 
     #[test]
