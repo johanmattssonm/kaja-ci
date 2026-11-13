@@ -14,16 +14,28 @@ use rest::BuildCommands;
 
 #[actix_web::get("/")]
 pub async fn index() -> impl Responder {
-    let mut project_dir = PathBuf::from_str(BUILD_DIR);
+    let project_dir = PathBuf::from_str(BUILD_DIR);
 
     if project_dir.is_err() {
         println!("Can't find build dir");
 
         let content = html! {{
-            <main>
-                <h1>Projects</h1>
-                <p>$BUILD_DIR no found</p>
-            </main>
+            <!doctype html>
+            <html lang="en">
+                <head>
+                    <meta charset="UTF-8" />
+                    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+                    <title>CI Settings View</title>
+                    <script type="module" src="pkg/main.js" defer></script>
+                    <link rel="stylesheet" href="pkg/styles.css" />
+                </head>
+                <body>
+                    <main>
+                        <h1>Projects</h1>
+                        <p>$BUILD_DIR no found</p>
+                    </main>
+                </body>
+            </html>
         }};
 
         return HttpResponse::Ok()
@@ -40,11 +52,23 @@ pub async fn index() -> impl Responder {
         print!("No ci.json found in {}", project_dir.display());
 
         let content = html! {{
-            <main>
-                <h1>Projects</h1>
-                <p>$BUILD_DIR</p>
-                <p>No config file found. Expecting ci.json in project folder</p>
-            </main>
+            <!doctype html>
+            <html lang="en">
+                <head>
+                    <meta charset="UTF-8" />
+                    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+                    <title>CI Settings View</title>
+                    <script type="module" src="pkg/main.js" defer></script>
+                    <link rel="stylesheet" href="pkg/styles.css" />
+                </head>
+                <body>
+                    <main>
+                        <h1>Projects</h1>
+                        <p>$BUILD_DIR</p>
+                        <p>No config file found. Expecting ci.json in project folder</p>
+                    </main>
+                </body>
+            </html>
         }};
 
         return HttpResponse::Ok()
@@ -59,12 +83,24 @@ pub async fn index() -> impl Responder {
         let err = config.unwrap_err();
 
         let content = html! {{
-            <main>
-                <h1>Projects</h1>
-                <p>$BUILD_DIR</p>
-                <p>Failed to parse ci.json.</p>
-                <p>$err</p>
-            </main>
+            <!doctype html>
+            <html lang="en">
+                <head>
+                    <meta charset="UTF-8" />
+                    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+                    <title>CI Settings View</title>
+                    <script type="module" src="pkg/main.js" defer></script>
+                    <link rel="stylesheet" href="pkg/styles.css" />
+                </head>
+                <body>
+                    <main>
+                        <h1>Projects</h1>
+                        <p>$BUILD_DIR</p>
+                        <p>Failed to parse ci.json.</p>
+                        <p>$err</p>
+                    </main>
+                </body>
+            </html>
         }};
 
         return HttpResponse::Ok()
@@ -75,8 +111,11 @@ pub async fn index() -> impl Responder {
     let projects = vec![BUILD_DIR];
 
     let content = html! {{
-        <html>
+        <!doctype html>
+        <html lang="en">
             <head>
+                <meta charset="UTF-8" />
+                <meta name="viewport" content="width=device-width, initial-scale=1.0" />
                 <title>CI Settings View</title>
                 <script type="module" src="pkg/main.js" defer></script>
                 <link rel="stylesheet" href="pkg/styles.css" />

@@ -27,12 +27,15 @@ pub async fn settings(params: web::Query<ProjectGetParams>) -> impl Responder {
     }
 
     let content = html! {{
-        <html>
-        <head>
-            <title>CI Settings View</title>
-            <script type="module" src="pkg/main.js" defer></script>
-            <link rel="stylesheet" href="pkg/styles.css" />
-        </head>
+        <!doctype html>
+        <html lang="en">
+            <head>
+                <meta charset="UTF-8" />
+                <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+                <title>CI Settings View</title>
+                <script type="module" src="pkg/main.js" defer></script>
+                <link rel="stylesheet" href="pkg/styles.css" />
+            </head>
             <body>
                 <nav class="top-bar" aria-label="Primary">
                     <a class="top-bar-link" href="/">Home</a>
