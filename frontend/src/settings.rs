@@ -90,7 +90,7 @@ impl SettingsComponent {
                 <input id="terminal" name="terminal" type="text" value="$(terminal)" />
             </p>
 
-            <button onclick="saveSettings()">Save</button>
+            <button onclick="saveSettings('$id')">Save</button>
         }};
 
         element.set_inner_html(content.as_str());
@@ -98,14 +98,28 @@ impl SettingsComponent {
 }
 
 #[callback("saveSettings")]
-async fn save_settings() {
-    let project: String = try_get_value("project");
-    let git: String = try_get_value("git");
-    let build: String = try_get_value("build");
-    let test: String = try_get_value("test");
-    let release: String = try_get_value("release");
-    let clean: String = try_get_value("clean");
-    let terminal: String = try_get_value("terminal");
+async fn save_settings(id: String) {
+    let component = SettingsComponent::get_component(&id);
+
+    if component.is_none() {
+        log!("No component");
+        return;
+    }
+
+    let project = component.unwrap().get_attribute("project");
+
+    if project.is_none() {
+        log!("Project is not set in settings.");
+        return;
+    }
+
+    let project: String = project.unwrap();
+    let git: String = try_get_value("#git");
+    let build: String = try_get_value("#build");
+    let test: String = try_get_value("#test");
+    let release: String = try_get_value("#release");
+    let clean: String = try_get_value("#clean");
+    let terminal: String = try_get_value("#terminal");
 
     let settings = BuildCommands {
         git: Some(git),
