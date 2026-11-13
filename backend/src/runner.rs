@@ -52,6 +52,7 @@ struct TerminalScreen {
     scroll_top: usize,
     scroll_bottom: usize,
     alternate_screen: bool,
+    insert_mode: bool,
 }
 
 impl TerminalScreen {
@@ -69,6 +70,7 @@ impl TerminalScreen {
             scroll_top: 0,
             scroll_bottom: rows.saturating_sub(1),
             alternate_screen: false,
+            insert_mode: false,
         }
     }
 
@@ -298,9 +300,9 @@ impl TerminalScreen {
             }
             'm' => {} // SGR: Select Graphic Rendition
             'h' | 'l' => {
-                if private_mode {
-                    let enable = final_byte == 'h';
+                let enable = final_byte == 'h';
 
+                if private_mode {
                     for raw in params.split(';') {
                         let code = raw.parse::<usize>().ok();
                         match code {
@@ -311,6 +313,12 @@ impl TerminalScreen {
                                 }
                             }
                             _ => {}
+                        }
+                    }
+                } else {
+                    for raw in params.split(';') {
+                        if raw == "4" {
+                            self.insert_mode = enable;
                         }
                     }
                 }
@@ -483,6 +491,10 @@ impl TerminalScreen {
         if self.cursor_col >= self.cols {
             self.cursor_col = 0;
             self.new_line();
+        }
+
+        if self.insert_mode {
+            self.insert_chars(1);
         }
 
         self.grid[self.cursor_row][self.cursor_col] = ch;
@@ -661,6 +673,22 @@ mod tests {
 
         assert!(text.starts_with("AB"));
         assert!(!text.contains("666;vte.shell"));
+    }
+
+    #[test]
+    fn insert_mode_inserts_text_at_cursor() {
+        let mut screen = TerminalScreen::new(1, 16);
+        screen.feed("abcd\u{1b}[2D\u{1b}[4hX\u{1b}[4l");
+        let text = screen.to_text();
+        assert_eq!(text.trim_end(), "abXcd");
+    }
+
+    #[test]
+    fn default_mode_overwrites_text_at_cursor() {
+        let mut screen = TerminalScreen::new(1, 16);
+        screen.feed("abcd\u{1b}[2DX");
+        let text = screen.to_text();
+        assert_eq!(text.trim_end(), "abXd");
     }
 }
 

@@ -10,6 +10,7 @@ struct AnsiRenderState {
     lines: Vec<String>,
     current_line_cells: Vec<String>,
     cursor_col: usize,
+    insert_mode: bool,
 }
 
 thread_local! {
@@ -148,7 +149,10 @@ fn ansi_to_html_streaming(input: &str, state: &mut AnsiRenderState) {
                     b'K' => apply_erase_in_line(params, state),
                     b'D' => apply_cursor_left(params, state),
                     b'C' => apply_cursor_right(params, state),
+                    b'@' => apply_insert_chars(params, state),
                     b'P' => apply_delete_chars(params, state),
+                    b'h' => apply_mode_set(params, state, true),
+                    b'l' => apply_mode_set(params, state, false),
                     _ => {}
                 }
 
@@ -706,7 +710,11 @@ fn flush_text_run(run: &str, state: &mut AnsiRenderState) {
         }
 
         if state.cursor_col < state.current_line_cells.len() {
-            state.current_line_cells[state.cursor_col] = rendered;
+            if state.insert_mode {
+                state.current_line_cells.insert(state.cursor_col, rendered);
+            } else {
+                state.current_line_cells[state.cursor_col] = rendered;
+            }
         } else {
             state.current_line_cells.push(rendered);
         }
@@ -741,6 +749,19 @@ fn apply_cursor_right(params: &str, state: &mut AnsiRenderState) {
     state.cursor_col = (state.cursor_col + n).min(state.current_line_cells.len());
 }
 
+fn apply_insert_chars(params: &str, state: &mut AnsiRenderState) {
+    let n = parse_cursor_n(params);
+
+    if n == 0 {
+        return;
+    }
+
+    let col = state.cursor_col.min(state.current_line_cells.len());
+    let blank_cell = render_text(" ", state);
+    let blanks = std::iter::repeat_n(blank_cell, n);
+    state.current_line_cells.splice(col..col, blanks);
+}
+
 fn apply_delete_chars(params: &str, state: &mut AnsiRenderState) {
     let n = parse_cursor_n(params);
 
@@ -750,6 +771,18 @@ fn apply_delete_chars(params: &str, state: &mut AnsiRenderState) {
 
     let end = (state.cursor_col + n).min(state.current_line_cells.len());
     state.current_line_cells.drain(state.cursor_col..end);
+}
+
+fn apply_mode_set(params: &str, state: &mut AnsiRenderState, enable: bool) {
+    if params.starts_with('?') {
+        return;
+    }
+
+    for raw in params.split(';') {
+        if raw == "4" {
+            state.insert_mode = enable;
+        }
+    }
 }
 
 fn parse_cursor_n(params: &str) -> usize {
@@ -842,6 +875,20 @@ mod tests {
         // then terminal sends DCH to delete at cursor.
         ansi_to_html_streaming("abcd\u{1b}[D\u{0008}\u{1b}[P", &mut state);
         assert_eq!(render_buffer(&state), "abd");
+    }
+
+    #[test]
+    fn insert_mode_inserts_chars_at_cursor() {
+        let mut state = AnsiRenderState::default();
+        ansi_to_html_streaming("abcd\u{1b}[2D\u{1b}[4hX\u{1b}[4l", &mut state);
+        assert_eq!(render_buffer(&state), "abXcd");
+    }
+
+    #[test]
+    fn default_mode_overwrites_chars_at_cursor() {
+        let mut state = AnsiRenderState::default();
+        ansi_to_html_streaming("abcd\u{1b}[2DX", &mut state);
+        assert_eq!(render_buffer(&state), "abXd");
     }
 
     #[test]
