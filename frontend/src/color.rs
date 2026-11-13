@@ -1,5 +1,19 @@
 use std::{cell::RefCell, collections::HashMap};
 
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct CellStyle {
+    bold: bool,
+    fg_class: Option<&'static str>,
+    bg_class: Option<&'static str>,
+    hyperlink: Option<String>,
+}
+
+#[derive(Clone, Debug)]
+struct StyledCell {
+    text: String,
+    style: CellStyle,
+}
+
 #[derive(Default)]
 struct AnsiRenderState {
     pending_escape: String,
@@ -8,7 +22,7 @@ struct AnsiRenderState {
     bg_class: Option<&'static str>,
     hyperlink: Option<String>,
     lines: Vec<String>,
-    current_line_cells: Vec<String>,
+    current_line_cells: Vec<StyledCell>,
     cursor_col: usize,
     insert_mode: bool,
 }
@@ -44,7 +58,7 @@ pub fn append_ansi_chunk(id: &str, chunk: &str, cursor_col: Option<usize>) -> St
 }
 
 fn render_buffer(state: &AnsiRenderState) -> String {
-    let current_line = state.current_line_cells.join("");
+    let current_line = render_cells(&state.current_line_cells);
 
     if state.lines.is_empty() {
         return current_line;
@@ -69,7 +83,7 @@ fn render_buffer_with_caret(state: &AnsiRenderState) -> String {
     out
 }
 
-fn render_line_with_caret(cells: &[String], cursor_col: usize) -> String {
+fn render_line_with_caret(cells: &[StyledCell], cursor_col: usize) -> String {
     if cells.is_empty() {
         let mut out = String::new();
         if cursor_col > 0 {
@@ -80,7 +94,7 @@ fn render_line_with_caret(cells: &[String], cursor_col: usize) -> String {
     }
 
     if cursor_col >= cells.len() {
-        let mut out = cells.join("");
+        let mut out = render_cells(cells);
         if cursor_col > cells.len() {
             out.push_str(&" ".repeat(cursor_col - cells.len()));
         }
@@ -89,19 +103,11 @@ fn render_line_with_caret(cells: &[String], cursor_col: usize) -> String {
     }
 
     let mut out = String::new();
-
-    for cell in cells.iter().take(cursor_col) {
-        out.push_str(cell);
-    }
-
+    out.push_str(&render_cells(&cells[..cursor_col]));
     out.push_str(r#"<span class="terminal-caret">"#);
-    out.push_str(&cells[cursor_col]);
+    out.push_str(&render_cell(&cells[cursor_col]));
     out.push_str("</span>");
-
-    for cell in cells.iter().skip(cursor_col + 1) {
-        out.push_str(cell);
-    }
-
+    out.push_str(&render_cells(&cells[cursor_col + 1..]));
     out
 }
 
@@ -306,36 +312,82 @@ fn sgr_bg_class(code: u16) -> Option<&'static str> {
     }
 }
 
-fn render_text(text: &str, state: &AnsiRenderState) -> String {
+fn style_from_state(state: &AnsiRenderState) -> CellStyle {
+    CellStyle {
+        bold: state.bold,
+        fg_class: state.fg_class,
+        bg_class: state.bg_class,
+        hyperlink: state.hyperlink.clone(),
+    }
+}
+
+fn make_cell(text: &str, state: &AnsiRenderState) -> Option<StyledCell> {
     if text.is_empty() {
-        return String::new();
+        return None;
     }
 
     let normalized = normalize_terminal_text(text);
     if normalized.is_empty() {
+        return None;
+    }
+
+    Some(StyledCell {
+        text: normalized,
+        style: style_from_state(state),
+    })
+}
+
+fn render_cells(cells: &[StyledCell]) -> String {
+    if cells.is_empty() {
         return String::new();
     }
 
-    let mut html = escape_html(&normalized);
+    let mut out = String::new();
+    let mut i = 0usize;
 
-    if let Some(url) = &state.hyperlink {
+    while i < cells.len() {
+        let style = &cells[i].style;
+        let mut run_text = String::new();
+        run_text.push_str(&cells[i].text);
+
+        let mut j = i + 1;
+        while j < cells.len() && cells[j].style == *style {
+            run_text.push_str(&cells[j].text);
+            j += 1;
+        }
+
+        out.push_str(&render_styled_text(&run_text, style));
+        i = j;
+    }
+
+    out
+}
+
+fn render_cell(cell: &StyledCell) -> String {
+    render_styled_text(&cell.text, &cell.style)
+}
+
+fn render_styled_text(text: &str, style: &CellStyle) -> String {
+    let mut html = escape_html(text);
+
+    if let Some(url) = &style.hyperlink {
         let href = escape_attr(url);
         html = format!(r#"<a href="{href}" target="_blank" rel="noopener noreferrer">{html}</a>"#);
     }
 
-    if state.bold || state.fg_class.is_some() || state.bg_class.is_some() {
+    if style.bold || style.fg_class.is_some() || style.bg_class.is_some() {
         let mut classes = String::from("terminal-span");
 
-        if state.bold {
+        if style.bold {
             classes.push_str(" terminal-bold");
         }
 
-        if let Some(class_name) = state.fg_class {
+        if let Some(class_name) = style.fg_class {
             classes.push(' ');
             classes.push_str(class_name);
         }
 
-        if let Some(class_name) = state.bg_class {
+        if let Some(class_name) = style.bg_class {
             classes.push(' ');
             classes.push_str(class_name);
         }
@@ -680,7 +732,7 @@ fn append_text_with_controls(text: &str, state: &mut AnsiRenderState) {
             '\n' => {
                 flush_text_run(&run, state);
                 run.clear();
-                let rendered_line = state.current_line_cells.join("");
+                let rendered_line = render_cells(&state.current_line_cells);
                 state.lines.push(rendered_line);
                 state.current_line_cells.clear();
                 state.cursor_col = 0;
@@ -704,19 +756,20 @@ fn flush_text_run(run: &str, state: &mut AnsiRenderState) {
     }
 
     for ch in run.chars() {
-        let rendered = render_text(&ch.to_string(), state);
-        if rendered.is_empty() {
+        let mut buf = [0u8; 4];
+        let ch_str = ch.encode_utf8(&mut buf);
+        let Some(cell) = make_cell(ch_str, state) else {
             continue;
-        }
+        };
 
         if state.cursor_col < state.current_line_cells.len() {
             if state.insert_mode {
-                state.current_line_cells.insert(state.cursor_col, rendered);
+                state.current_line_cells.insert(state.cursor_col, cell);
             } else {
-                state.current_line_cells[state.cursor_col] = rendered;
+                state.current_line_cells[state.cursor_col] = cell;
             }
         } else {
-            state.current_line_cells.push(rendered);
+            state.current_line_cells.push(cell);
         }
 
         state.cursor_col += 1;
@@ -757,7 +810,9 @@ fn apply_insert_chars(params: &str, state: &mut AnsiRenderState) {
     }
 
     let col = state.cursor_col.min(state.current_line_cells.len());
-    let blank_cell = render_text(" ", state);
+    let Some(blank_cell) = make_cell(" ", state) else {
+        return;
+    };
     let blanks = std::iter::repeat_n(blank_cell, n);
     state.current_line_cells.splice(col..col, blanks);
 }
@@ -916,6 +971,16 @@ mod tests {
 
         assert!(out.contains("terminal-bold"));
         assert!(out.contains("terminal-fg-red"));
+    }
+
+    #[test]
+    fn contiguous_text_with_same_sgr_style_is_grouped_into_one_span() {
+        let mut state = AnsiRenderState::default();
+        ansi_to_html_streaming("\u{1b}[31mabc\u{1b}[0m", &mut state);
+        let out = render_buffer(&state);
+
+        assert_eq!(out.matches("terminal-fg-red").count(), 1);
+        assert!(out.contains(">abc<"));
     }
 
     #[test]
