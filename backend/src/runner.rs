@@ -51,6 +51,7 @@ struct TerminalScreen {
     osc_esc_pending: bool,
     scroll_top: usize,
     scroll_bottom: usize,
+    alternate_screen: bool,
 }
 
 impl TerminalScreen {
@@ -67,6 +68,7 @@ impl TerminalScreen {
             osc_esc_pending: false,
             scroll_top: 0,
             scroll_bottom: rows.saturating_sub(1),
+            alternate_screen: false,
         }
     }
 
@@ -169,6 +171,7 @@ impl TerminalScreen {
     }
 
     fn apply_csi(&mut self, final_byte: char, params: &str) {
+        let private_mode = params.starts_with('?');
         let params = params.trim_start_matches('?');
 
         match final_byte {
@@ -259,9 +262,31 @@ impl TerminalScreen {
                     self.cursor_col = col.min(self.cols.saturating_sub(1));
                 }
             }
-            'm' | 'h' | 'l' => {}
+            'm' => {}
+            'h' | 'l' => {
+                if private_mode {
+                    let enable = final_byte == 'h';
+
+                    for raw in params.split(';') {
+                        let code = raw.parse::<usize>().ok();
+                        match code {
+                            Some(47) | Some(1047) | Some(1049) => {
+                                self.alternate_screen = enable;
+                                if enable {
+                                    self.erase_display(2);
+                                }
+                            }
+                            _ => {}
+                        }
+                    }
+                }
+            }
             _ => {}
         }
+    }
+
+    fn in_alternate_screen(&self) -> bool {
+        self.alternate_screen
     }
 
     fn erase_display(&mut self, mode: usize) {
@@ -895,8 +920,8 @@ async fn start_build(
     send_status(session, "RUNNING").await;
     let pty_system = native_pty_system();
 
-    let rows = 20u16;
-    let cols = 80u16;
+    let rows = 30u16;
+    let cols = 120u16;
 
     let pty_pair = match pty_system.openpty(PtySize {
         rows,
@@ -981,12 +1006,22 @@ async fn start_build(
                     let chunk = String::from_utf8_lossy(&buf[..n]).to_string();
                     screen.feed(&chunk);
 
-                    let action = ActionResponse {
-                        stdout: Some(screen.to_text()),
-                        action: "SCREEN".to_string(),
-                        status: None,
-                        cursor_row: Some(screen.cursor_row),
-                        cursor_col: Some(screen.cursor_col),
+                    let action = if screen.in_alternate_screen() {
+                        ActionResponse {
+                            stdout: Some(screen.to_text()),
+                            action: "SCREEN".to_string(),
+                            status: None,
+                            cursor_row: Some(screen.cursor_row),
+                            cursor_col: Some(screen.cursor_col),
+                        }
+                    } else {
+                        ActionResponse {
+                            stdout: Some(chunk),
+                            action: "STDOUT".to_string(),
+                            status: None,
+                            cursor_row: None,
+                            cursor_col: None,
+                        }
                     };
 
                     let json = serde_json::to_string(&action);

@@ -5,6 +5,7 @@ struct AnsiRenderState {
     pending_escape: String,
     bold: bool,
     fg_class: Option<&'static str>,
+    bg_class: Option<&'static str>,
     hyperlink: Option<String>,
     lines: Vec<String>,
     current_line: String,
@@ -160,6 +161,7 @@ fn apply_sgr(params: &str, state: &mut AnsiRenderState) {
     if params.is_empty() {
         state.bold = false;
         state.fg_class = None;
+        state.bg_class = None;
         return;
     }
 
@@ -169,12 +171,17 @@ fn apply_sgr(params: &str, state: &mut AnsiRenderState) {
             0 => {
                 state.bold = false;
                 state.fg_class = None;
+                state.bg_class = None;
             }
             1 => state.bold = true,
             22 => state.bold = false,
             39 => state.fg_class = None,
+            49 => state.bg_class = None,
             30..=37 | 90..=97 => {
                 state.fg_class = sgr_fg_class(code);
+            }
+            40..=47 | 100..=107 => {
+                state.bg_class = sgr_bg_class(code);
             }
             _ => {}
         }
@@ -213,6 +220,28 @@ fn sgr_fg_class(code: u16) -> Option<&'static str> {
     }
 }
 
+fn sgr_bg_class(code: u16) -> Option<&'static str> {
+    match code {
+        40 => Some("terminal-bg-black"),
+        41 => Some("terminal-bg-red"),
+        42 => Some("terminal-bg-green"),
+        43 => Some("terminal-bg-yellow"),
+        44 => Some("terminal-bg-blue"),
+        45 => Some("terminal-bg-magenta"),
+        46 => Some("terminal-bg-cyan"),
+        47 => Some("terminal-bg-white"),
+        100 => Some("terminal-bg-bright-black"),
+        101 => Some("terminal-bg-bright-red"),
+        102 => Some("terminal-bg-bright-green"),
+        103 => Some("terminal-bg-bright-yellow"),
+        104 => Some("terminal-bg-bright-blue"),
+        105 => Some("terminal-bg-bright-magenta"),
+        106 => Some("terminal-bg-bright-cyan"),
+        107 => Some("terminal-bg-bright-white"),
+        _ => None,
+    }
+}
+
 fn render_text(text: &str, state: &AnsiRenderState) -> String {
     if text.is_empty() {
         return String::new();
@@ -230,7 +259,7 @@ fn render_text(text: &str, state: &AnsiRenderState) -> String {
         html = format!(r#"<a href="{href}" target="_blank" rel="noopener noreferrer">{html}</a>"#);
     }
 
-    if state.bold || state.fg_class.is_some() {
+    if state.bold || state.fg_class.is_some() || state.bg_class.is_some() {
         let mut classes = String::from("terminal-span");
 
         if state.bold {
@@ -238,6 +267,11 @@ fn render_text(text: &str, state: &AnsiRenderState) -> String {
         }
 
         if let Some(class_name) = state.fg_class {
+            classes.push(' ');
+            classes.push_str(class_name);
+        }
+
+        if let Some(class_name) = state.bg_class {
             classes.push(' ');
             classes.push_str(class_name);
         }

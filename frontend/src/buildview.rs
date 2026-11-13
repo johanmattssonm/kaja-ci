@@ -94,8 +94,60 @@ impl ConsoleComponent {
                     overflow: auto;
                 }
 
+                .terminal-fullscreen {
+                    min-height: calc(100vh - 190px);
+                    max-height: none;
+                }
+
                 .terminal-span { white-space: pre; }
                 .terminal-bold { font-weight: 700; }
+
+                .terminal-mono {
+                    color: #e6edf3;
+                }
+
+                .terminal-mono .terminal-bold {
+                    font-weight: 700;
+                }
+
+                .terminal-mono .terminal-fg-black,
+                .terminal-mono .terminal-fg-red,
+                .terminal-mono .terminal-fg-green,
+                .terminal-mono .terminal-fg-yellow,
+                .terminal-mono .terminal-fg-blue,
+                .terminal-mono .terminal-fg-magenta,
+                .terminal-mono .terminal-fg-cyan,
+                .terminal-mono .terminal-fg-white,
+                .terminal-mono .terminal-fg-bright-black,
+                .terminal-mono .terminal-fg-bright-red,
+                .terminal-mono .terminal-fg-bright-green,
+                .terminal-mono .terminal-fg-bright-yellow,
+                .terminal-mono .terminal-fg-bright-blue,
+                .terminal-mono .terminal-fg-bright-magenta,
+                .terminal-mono .terminal-fg-bright-cyan,
+                .terminal-mono .terminal-fg-bright-white {
+                    color: inherit;
+                }
+
+                .terminal-mono .terminal-bg-black,
+                .terminal-mono .terminal-bg-red,
+                .terminal-mono .terminal-bg-green,
+                .terminal-mono .terminal-bg-yellow,
+                .terminal-mono .terminal-bg-blue,
+                .terminal-mono .terminal-bg-magenta,
+                .terminal-mono .terminal-bg-cyan,
+                .terminal-mono .terminal-bg-white,
+                .terminal-mono .terminal-bg-bright-black,
+                .terminal-mono .terminal-bg-bright-red,
+                .terminal-mono .terminal-bg-bright-green,
+                .terminal-mono .terminal-bg-bright-yellow,
+                .terminal-mono .terminal-bg-bright-blue,
+                .terminal-mono .terminal-bg-bright-magenta,
+                .terminal-mono .terminal-bg-bright-cyan,
+                .terminal-mono .terminal-bg-bright-white {
+                    background: transparent;
+                    color: inherit;
+                }
 
                 .terminal-fg-black { color: #0b0b0b; }
                 .terminal-fg-red { color: #ff7b72; }
@@ -114,6 +166,24 @@ impl ConsoleComponent {
                 .terminal-fg-bright-magenta { color: #d2a8ff; }
                 .terminal-fg-bright-cyan { color: #8be9fd; }
                 .terminal-fg-bright-white { color: #ffffff; }
+
+                .terminal-bg-black { background: #0b0b0b; }
+                .terminal-bg-red { background: #7f1d1d; }
+                .terminal-bg-green { background: #14532d; }
+                .terminal-bg-yellow { background: #713f12; }
+                .terminal-bg-blue { background: #1e3a8a; }
+                .terminal-bg-magenta { background: #581c87; }
+                .terminal-bg-cyan { background: #134e4a; }
+                .terminal-bg-white { background: #cbd5e1; color: #0f172a; }
+
+                .terminal-bg-bright-black { background: #334155; }
+                .terminal-bg-bright-red { background: #b91c1c; }
+                .terminal-bg-bright-green { background: #166534; }
+                .terminal-bg-bright-yellow { background: #a16207; }
+                .terminal-bg-bright-blue { background: #1d4ed8; }
+                .terminal-bg-bright-magenta { background: #7e22ce; }
+                .terminal-bg-bright-cyan { background: #0e7490; }
+                .terminal-bg-bright-white { background: #f8fafc; color: #0f172a; }
 
                 .terminal-cursor {
                     background: #e6edf3;
@@ -367,9 +437,12 @@ fn process_build_output(id: &str, chunk: String) {
                 _ => color::render_terminal_screen(&stdout),
             };
 
+            element.set_class_name("terminal-output terminal-mono terminal-fullscreen");
             element.set_inner_html(&rendered);
             return;
         }
+
+        element.set_class_name("terminal-output");
 
         let rendered = color::append_ansi_chunk(id, &stdout);
         element.set_inner_html(&rendered);
