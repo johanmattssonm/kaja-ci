@@ -82,18 +82,22 @@ impl TerminalScreen {
         match self.escape_state {
             Some(EscapeState::Esc) => match b {
                 b'[' => {
+                    // ESC [ : CSI (Control Sequence Introducer)
                     self.escape_state = Some(EscapeState::Csi);
                     self.csi_params.clear();
                 }
                 b']' => {
+                    // ESC ] : OSC (Operating System Command)
                     self.escape_state = Some(EscapeState::Osc);
                     self.osc_esc_pending = false;
                 }
                 b'7' => {
+                    // ESC 7 : DECSC (save cursor)
                     self.saved_cursor = Some((self.cursor_row, self.cursor_col));
                     self.escape_state = None;
                 }
                 b'8' => {
+                    // ESC 8 : DECRC (restore cursor)
                     if let Some((row, col)) = self.saved_cursor {
                         self.cursor_row = row.min(self.rows.saturating_sub(1));
                         self.cursor_col = col.min(self.cols.saturating_sub(1));
@@ -101,13 +105,16 @@ impl TerminalScreen {
                     self.escape_state = None;
                 }
                 b'M' => {
+                    // ESC M : RI (reverse index)
                     self.reverse_index();
                     self.escape_state = None;
                 }
                 b if (0x20..=0x2f).contains(&b) => {
+                    // ESC intermediates (0x20..0x2F)
                     self.escape_state = Some(EscapeState::EscIntermediate);
                 }
                 b if (0x30..=0x7e).contains(&b) => {
+                    // ESC final byte (0x30..0x7E)
                     self.escape_state = None;
                 }
                 _ => {
@@ -116,12 +123,14 @@ impl TerminalScreen {
             },
             Some(EscapeState::Csi) => {
                 if (0x40..=0x7e).contains(&b) {
+                    // CSI final byte (0x40..0x7E)
                     let final_byte = b as char;
                     let params = self.csi_params.clone();
                     self.apply_csi(final_byte, &params);
                     self.csi_params.clear();
                     self.escape_state = None;
                 } else {
+                    // CSI parameter/intermediate bytes
                     self.csi_params.push(b as char);
                 }
             }
@@ -136,11 +145,11 @@ impl TerminalScreen {
 
                 match b {
                     0x07 => {
-                        // BEL terminator
+                        // BEL (bell) terminator
                         self.escape_state = None;
                     }
                     0x1b => {
-                        // Possible ST terminator: ESC \
+                        // ESC (escape), possible ST terminator: ESC \
                         self.osc_esc_pending = true;
                     }
                     _ => {}
@@ -152,13 +161,17 @@ impl TerminalScreen {
                 }
             }
             None => match b {
-                0x1b => self.escape_state = Some(EscapeState::Esc),
-                b'\r' => self.cursor_col = 0,
-                b'\n' => self.new_line(),
+                0x1b => self.escape_state = Some(EscapeState::Esc), // ESC (escape)
+                b'\r' => self.cursor_col = 0,                       // CR (carriage return)
+                b'\n' => self.new_line(),                           // LF (line feed / newline)
                 0x08 => {
+                    // BS (backspace)
                     self.cursor_col = self.cursor_col.saturating_sub(1);
+
+                    println!("BACKSPACE");
                 }
                 b'\t' => {
+                    // HT (horizontal tab)
                     let spaces = 8 - (self.cursor_col % 8);
                     for _ in 0..spaces {
                         self.put_char(' ');
@@ -176,93 +189,114 @@ impl TerminalScreen {
 
         match final_byte {
             'A' => {
+                // CUU: Cursor Up (arrow up)
                 let n = parse_csi_n(params, 1);
                 self.cursor_row = self.cursor_row.saturating_sub(n);
             }
             'B' => {
+                // CUD: Cursor Down (arrow down)
                 let n = parse_csi_n(params, 1);
                 self.cursor_row = (self.cursor_row + n).min(self.rows.saturating_sub(1));
             }
             'C' => {
+                // CUF: Cursor Forward (arrow right)
                 let n = parse_csi_n(params, 1);
                 self.cursor_col = (self.cursor_col + n).min(self.cols.saturating_sub(1));
             }
             'D' => {
+                // CUB: Cursor Backward (arrow left)
                 let n = parse_csi_n(params, 1);
                 self.cursor_col = self.cursor_col.saturating_sub(n);
             }
             'E' => {
+                // CNL: Cursor Next Line
                 let n = parse_csi_n(params, 1);
                 self.cursor_row = (self.cursor_row + n).min(self.rows.saturating_sub(1));
                 self.cursor_col = 0;
             }
             'F' => {
+                // CPL: Cursor Previous Line
                 let n = parse_csi_n(params, 1);
                 self.cursor_row = self.cursor_row.saturating_sub(n);
                 self.cursor_col = 0;
             }
             'G' => {
+                // CHA: Cursor Horizontal Absolute (set column)
                 let col = parse_csi_n(params, 1).saturating_sub(1);
                 self.cursor_col = col.min(self.cols.saturating_sub(1));
             }
             'H' | 'f' => {
+                // CUP / HVP: Cursor Position / Horizontal and Vertical Position
                 let (row, col) = parse_cup(params);
                 self.cursor_row = row.min(self.rows.saturating_sub(1));
                 self.cursor_col = col.min(self.cols.saturating_sub(1));
             }
             'd' => {
+                // VPA: Vertical Position Absolute (set row)
                 let row = parse_csi_n(params, 1).saturating_sub(1);
                 self.cursor_row = row.min(self.rows.saturating_sub(1));
             }
             'J' => {
+                // ED: Erase in Display
                 let mode = parse_csi_n(params, 0);
                 self.erase_display(mode);
             }
             'K' => {
+                // EL: Erase in Line
                 let mode = parse_csi_n(params, 0);
                 self.erase_line(mode);
             }
             '@' => {
+                // ICH: Insert Character(s)
                 let n = parse_csi_n(params, 1);
                 self.insert_chars(n);
             }
             'P' => {
+                // DCH: Delete Character(s)
                 let n = parse_csi_n(params, 1);
                 self.delete_chars(n);
             }
             'L' => {
+                // IL: Insert Line(s)
                 let n = parse_csi_n(params, 1);
                 self.insert_lines(n);
             }
             'M' => {
+                // DL: Delete Line(s)
                 let n = parse_csi_n(params, 1);
                 self.delete_lines(n);
             }
             'X' => {
+                // ECH: Erase Character(s)
                 let n = parse_csi_n(params, 1);
                 self.erase_chars(n);
             }
             'S' => {
+                // SU: Scroll Up
                 let n = parse_csi_n(params, 1);
                 self.scroll_up_region(n);
             }
             'T' => {
+                // SD: Scroll Down
                 let n = parse_csi_n(params, 1);
                 self.scroll_down_region(n);
             }
             'r' => {
+                // DECSTBM: Set top/bottom scrolling region
                 self.set_scroll_region(params);
             }
             's' => {
+                // SCP: Save cursor position
                 self.saved_cursor = Some((self.cursor_row, self.cursor_col));
             }
             'u' => {
+                // RCP: Restore cursor position
                 if let Some((row, col)) = self.saved_cursor {
                     self.cursor_row = row.min(self.rows.saturating_sub(1));
                     self.cursor_col = col.min(self.cols.saturating_sub(1));
                 }
             }
-            'm' => {}
+            'm' => {} // SGR: Select Graphic Rendition
             'h' | 'l' => {
                 if private_mode {
                     let enable = final_byte == 'h';
