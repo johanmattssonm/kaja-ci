@@ -10,7 +10,6 @@ use gloo_net::{
 use kaja_web::prelude::*;
 use wasm_bindgen::{JsCast, prelude::Closure};
 use wasm_bindgen_futures::spawn_local;
-use web_sys::HtmlInputElement;
 
 #[component("console-component")]
 struct Console {
@@ -48,9 +47,9 @@ impl Component for ConsoleComponent {
             connect_console_view(component_id, action.as_str(), project.as_str()).await;
         });
 
-        if let Some(element) = get_element_by_id(&format!("{}-stdin", &id)) {
-            if let Ok(input) = element.dyn_into::<HtmlInputElement>() {
-                let _ = input.focus();
+        if let Some(element) = get_element_by_id(&format!("{}-output", &id)) {
+            if let Ok(output) = element.dyn_into::<web_sys::HtmlElement>() {
+                let _ = output.focus();
             }
         }
     }
@@ -199,7 +198,6 @@ impl ConsoleComponent {
             <h1 id="status">Loading</h1>
             <p>Project Folder: $(project)</p>
             <pre id="$(id)-output" class="terminal-output" tabindex="0"></pre>
-            <input id="$(id)-stdin" placeholder="Type input and press Enter">
         }};
 
         element.set_inner_html(content.as_str());
@@ -326,18 +324,7 @@ fn send_stdin(stdin: String, input_tx: &mpsc::UnboundedSender<String>) {
 }
 
 fn setup_stdin_handler(id: &str, input_tx: mpsc::UnboundedSender<String>) {
-    let input_id = format!("{}-stdin", id);
     let output_id = format!("{}-output", id);
-
-    let input = match get_element_by_id(&input_id)
-        .and_then(|element| element.dyn_into::<HtmlInputElement>().ok())
-    {
-        Some(input) => input,
-        None => {
-            log!("Expected HtmlInputElement for stdin box");
-            return;
-        }
-    };
 
     let output = match get_element_by_id(&output_id) {
         Some(output) => output,
@@ -347,28 +334,6 @@ fn setup_stdin_handler(id: &str, input_tx: mpsc::UnboundedSender<String>) {
         }
     };
 
-    let keydown_input = input.clone();
-    let keydown_tx = input_tx.clone();
-    let keydown = Closure::<dyn FnMut(_)>::new(move |event: web_sys::KeyboardEvent| {
-        let Some(stdin) = key_to_terminal_input(&event) else {
-            return;
-        };
-
-        event.prevent_default();
-        send_stdin(stdin, &keydown_tx);
-        keydown_input.set_value("");
-    });
-
-    if input
-        .add_event_listener_with_callback("keydown", keydown.as_ref().unchecked_ref())
-        .is_err()
-    {
-        log!("Failed to register stdin keydown handler");
-        return;
-    }
-
-    // Fullscreen terminal UIs often involve users clicking the output area.
-    // Keep keyboard flow working by forwarding keys from the output element too.
     let output_tx = input_tx.clone();
     let output_keydown = Closure::<dyn FnMut(_)>::new(move |event: web_sys::KeyboardEvent| {
         let Some(stdin) = key_to_terminal_input(&event) else {
@@ -387,9 +352,9 @@ fn setup_stdin_handler(id: &str, input_tx: mpsc::UnboundedSender<String>) {
         return;
     }
 
-    let focus_input = input.clone();
+    let focus_output = output.clone();
     let click_focus = Closure::<dyn FnMut(_)>::new(move |_event: web_sys::Event| {
-        let _ = focus_input.focus();
+        let _ = focus_output.focus();
     });
 
     if output
@@ -400,7 +365,6 @@ fn setup_stdin_handler(id: &str, input_tx: mpsc::UnboundedSender<String>) {
         return;
     }
 
-    keydown.forget();
     output_keydown.forget();
     click_focus.forget();
 }
