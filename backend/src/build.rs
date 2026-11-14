@@ -20,6 +20,7 @@ pub async fn build(params: web::Query<ProjectGetParams>) -> impl Responder {
             <body>
                 <nav class="top-bar" aria-label="Primary">
                     <a class="top-bar-link" href="/">Home</a>
+                    <a class="top-bar-link" href="#" onclick="startTask('$(params.project)', 'build')">Run</a>
                     <a class="top-bar-link" href="#" onclick="abort('$(params.project)')">Abort</a>
                 </nav>
                 <console-component project="$(params.project)" action="build"></console-component>

@@ -12,8 +12,11 @@ use std::sync::{
     atomic::{AtomicU64, Ordering},
 };
 use std::thread;
-use std::time::Duration;
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use tokio::sync::{Mutex, broadcast, mpsc};
+
+const TASK_IDLE_TIMEOUT_SECONDS: u64 = 60 * 60;
+const TASK_IDLE_CHECK_INTERVAL_SECONDS: u64 = 30;
 
 #[path = "../../frontend/src/rest.rs"]
 mod rest;
@@ -26,6 +29,7 @@ pub const BUILD_DIR: &str = "/home/johan/Downloads/resting-chair";
 #[derive(Deserialize)]
 pub struct ProjectGetParams {
     pub project: String,
+    pub custom_label: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -904,20 +908,19 @@ fn build_detached_task_key(action_name: &str, folder: &str) -> String {
     build_task_key(action_name, folder)
 }
 
-fn normalize_run_task_key(task_key: &str) -> Option<&'static str> {
-    match task_key {
-        "git" => Some("git"),
-        "build" => Some("build"),
-        "test" => Some("test"),
-        "release" => Some("release"),
-        "clean" => Some("clean"),
-        "terminal" => Some("terminal"),
-        _ => None,
-    }
-}
-
 fn task_key_for_action(action: &Action) -> Option<String> {
     Some(build_task_key(&action.action, action.folder.as_deref()?))
+}
+
+fn now_unix_seconds() -> u64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0)
+}
+
+fn mark_activity(last_activity: &Arc<AtomicU64>) {
+    last_activity.store(now_unix_seconds(), Ordering::Relaxed);
 }
 
 async fn task_stdin_sender(task_key: &str) -> Option<mpsc::Sender<String>> {
@@ -929,16 +932,22 @@ async fn task_stdin_sender(task_key: &str) -> Option<mpsc::Sender<String>> {
         .and_then(|task| task.stdin_tx.clone())
 }
 
+async fn task_last_activity(task_key: &str) -> Option<Arc<AtomicU64>> {
+    APP_DATA
+        .read()
+        .await
+        .tasks
+        .get(task_key)
+        .map(|task| task.last_activity.clone())
+}
+
 async fn append_task_history(task_key: &str, output: &str) {
-    if output.is_empty() || is_terminal_task_key(task_key) {
+    if output.is_empty() {
         return;
     }
 
     let mut app = APP_DATA.write().await;
-
-    if let Some(task) = app.tasks.get_mut(task_key) {
-        task.history.extend_from_slice(output.as_bytes());
-    }
+    app.append_task_history(task_key, output.as_bytes());
 }
 
 async fn flush_pending_stdin(task_key: &str, stdin_state: Arc<Mutex<BuildInputState>>) {
@@ -968,6 +977,10 @@ async fn flush_pending_stdin(task_key: &str, stdin_state: Arc<Mutex<BuildInputSt
             state.pending.push_front(pending);
             break;
         }
+
+        if let Some(last_activity) = task_last_activity(task_key).await {
+            mark_activity(&last_activity);
+        }
     }
 }
 
@@ -976,37 +989,35 @@ async fn attach_to_running_task(
     stdin_state: Arc<Mutex<BuildInputState>>,
     task_key: &str,
 ) -> bool {
-    let (history, mut stdout_rx) = {
+    let (history, is_running, stdout_tx) = {
         let app = APP_DATA.read().await;
 
         let Some(task) = app.tasks.get(task_key) else {
             return false;
         };
 
-        if task.running_command.is_none() {
-            return false;
-        }
-
-        let Some(stdout_tx) = task.stdout_tx.clone() else {
-            return false;
-        };
-
-        (task.history.clone(), stdout_tx.subscribe())
+        (
+            app.task_history(task_key)
+                .unwrap_or_else(|| task.history.clone()),
+            task.running_command.is_some(),
+            task.stdout_tx.clone(),
+        )
     };
 
-    if !history.is_empty() && !is_terminal_task_key(task_key) {
-        let history_action = ActionResponse {
-            stdout: Some(String::from_utf8_lossy(&history).into_owned()),
-            action: "STDOUT".to_string(),
-            status: None,
-            cursor_row: None,
-            cursor_col: None,
-        };
-
-        if let Ok(json) = serde_json::to_string(&history_action) {
-            let _ = session.text(json).await;
-        }
+    if !history.is_empty() {
+        let history = String::from_utf8_lossy(&history);
+        send_stdout(session, history.as_ref()).await;
     }
+
+    if !is_running {
+        return true;
+    }
+
+    let Some(stdout_tx) = stdout_tx else {
+        return false;
+    };
+
+    let mut stdout_rx = stdout_tx.subscribe();
 
     send_status(session, "RUNNING").await;
     flush_pending_stdin(task_key, stdin_state).await;
@@ -1094,9 +1105,15 @@ async fn process_attach_action(
         return;
     }
 
-    let message = format!("No running task found for key '{}'.", task_key);
-    send_stdout(session, message.as_str()).await;
-    send_status(session, "FAILED").await;
+    let history = {
+        let app = APP_DATA.read().await;
+        app.task_history(task_key.as_str())
+    };
+
+    if let Some(history) = history.filter(|history| !history.is_empty()) {
+        let history = String::from_utf8_lossy(&history);
+        send_stdout(session, history.as_ref()).await;
+    }
 }
 
 async fn send_stdout(session: &mut Session, line: &str) {
@@ -1214,6 +1231,11 @@ async fn process_std_in(action: Action, stdin_state: Arc<Mutex<BuildInputState>>
         println!("STDIN send failed, buffering input.");
         let mut state = stdin_state.lock().await;
         state.pending.push_back(input_line);
+        return;
+    }
+
+    if let Some(last_activity) = task_last_activity(task_key.as_str()).await {
+        mark_activity(&last_activity);
     }
 }
 
@@ -1246,11 +1268,45 @@ fn command_to_executable(action: &Action) -> Option<CommandBuilder> {
         "release" => parse_command(config_commands.release, folder).ok(),
         "clean" => parse_command(config_commands.clean, folder).ok(),
         "terminal" => parse_command(config_commands.terminal, folder).ok(),
-        _ => {
-            println!("Unknown action {}", action.action);
-            None
-        }
+        _ => find_custom_command_by_label(&config_commands, action.action.as_str())
+            .and_then(|command| parse_command(Some(command), folder).ok()),
     }
+}
+
+fn find_custom_command_by_label(config_commands: &BuildCommands, label: &str) -> Option<String> {
+    let label = label.trim();
+
+    config_commands
+        .custom_comands
+        .as_ref()?
+        .iter()
+        .find_map(|custom| {
+            let custom_label = custom.label.as_deref()?.trim();
+            if custom_label == label {
+                return custom.command.clone();
+            }
+
+            None
+        })
+}
+
+fn apply_terminal_env(cmd: &mut CommandBuilder) {
+    cmd.env("TERM", "xterm-256color");
+    cmd.env("COLORTERM", "truecolor");
+    cmd.env("CLICOLOR", "1");
+    cmd.env("CLICOLOR_FORCE", "1");
+}
+
+fn should_force_ls_color(program: &str, args: &[String]) -> bool {
+    let binary = program.rsplit('/').next().unwrap_or(program);
+
+    if binary != "ls" {
+        return false;
+    }
+
+    !args
+        .iter()
+        .any(|arg| arg == "--color" || arg.starts_with("--color=") || arg == "-G")
 }
 
 fn parse_command(command: Option<String>, folder: &str) -> Result<CommandBuilder, String> {
@@ -1266,7 +1322,12 @@ fn parse_command(command: Option<String>, folder: &str) -> Result<CommandBuilder
         cmd.arg(arg);
     }
 
+    if should_force_ls_color(program, args) {
+        cmd.arg("--color=always");
+    }
+
     cmd.cwd(folder);
+    apply_terminal_env(&mut cmd);
     Ok(cmd)
 }
 
@@ -1275,6 +1336,7 @@ async fn register_process(
     process: Arc<StdRwLock<Box<dyn Child + Send + Sync>>>,
     stdin_tx: mpsc::Sender<String>,
     stdout_tx: broadcast::Sender<String>,
+    last_activity: Arc<AtomicU64>,
 ) {
     let _ = APP_DATA.write().await.start_task(
         Some(action.action.clone()),
@@ -1283,6 +1345,7 @@ async fn register_process(
         process,
         stdin_tx,
         stdout_tx,
+        last_activity,
     );
 }
 
@@ -1312,15 +1375,50 @@ fn wait_for_exit(
     }
 }
 
+fn spawn_idle_timeout_watchdog(
+    task_key: String,
+    process: Arc<StdRwLock<Box<dyn Child + Send + Sync>>>,
+    stdout_tx: broadcast::Sender<String>,
+    last_activity: Arc<AtomicU64>,
+) {
+    std::thread::spawn(move || {
+        loop {
+            thread::sleep(Duration::from_secs(TASK_IDLE_CHECK_INTERVAL_SECONDS));
+
+            let status = {
+                match process.write() {
+                    Ok(mut child) => child.try_wait(),
+                    Err(_) => return,
+                }
+            };
+
+            match status {
+                Ok(Some(_)) => return,
+                Ok(None) => {}
+                Err(_) => return,
+            }
+
+            let now = now_unix_seconds();
+            let last = last_activity.load(Ordering::Relaxed);
+
+            if now.saturating_sub(last) < TASK_IDLE_TIMEOUT_SECONDS {
+                continue;
+            }
+
+            broadcast_task_stdout(task_key.as_str(), &stdout_tx, "Timeout".to_string());
+            let _ = process.write().ok().and_then(|mut child| child.kill().ok());
+            return;
+        }
+    });
+}
+
 pub async fn start_run_task(
     project_folder: String,
     run_task_key: String,
 ) -> Result<String, RunTaskError> {
-    let Some(action_name) = normalize_run_task_key(run_task_key.as_str()) else {
-        return Err(RunTaskError::NoCommandConfigured(run_task_key));
-    };
+    let action_name = run_task_key;
 
-    start_detached_action(action_name, project_folder).await
+    start_detached_action(action_name.as_str(), project_folder).await
 }
 
 async fn check_requested_task_state(
@@ -1392,7 +1490,7 @@ async fn start_detached_action(
     let mut child = pty_pair
         .slave
         .spawn_command(cmd)
-        .map_err(|err| RunTaskError::Internal(format!("failed to start run command: {err}")))?;
+        .map_err(|err| RunTaskError::Internal(format!("Failed to start command: {err}")))?;
 
     let reader = match pty_pair.master.try_clone_reader() {
         Ok(reader) => reader,
@@ -1417,6 +1515,7 @@ async fn start_detached_action(
     let (input_tx, mut input_rx) = mpsc::channel::<String>(100);
     let (stdout_tx, _) = broadcast::channel::<String>(200);
     let child = Arc::new(StdRwLock::new(child));
+    let last_activity = Arc::new(AtomicU64::new(now_unix_seconds()));
 
     let task_key = {
         let mut app = APP_DATA.write().await;
@@ -1428,6 +1527,7 @@ async fn start_detached_action(
             child.clone(),
             input_tx,
             stdout_tx.clone(),
+            last_activity.clone(),
         ) {
             Ok(task_key) => task_key,
             Err(err) => {
@@ -1443,6 +1543,13 @@ async fn start_detached_action(
     broadcast_task_status(&stdout_tx, "RUNNING");
 
     drop(pty_pair.slave);
+
+    spawn_idle_timeout_watchdog(
+        task_key.clone(),
+        child.clone(),
+        stdout_tx.clone(),
+        last_activity.clone(),
+    );
 
     let task_key_stdout = task_key.clone();
     let stdout_tx_reader = stdout_tx.clone();
@@ -1505,6 +1612,8 @@ async fn start_detached_action(
         }
     });
 
+    let last_activity_writer = last_activity.clone();
+
     std::thread::spawn(move || {
         while let Some(data) = input_rx.blocking_recv() {
             if writer.write_all(data.as_bytes()).is_err() {
@@ -1514,6 +1623,8 @@ async fn start_detached_action(
             if writer.flush().is_err() {
                 break;
             }
+
+            mark_activity(&last_activity_writer);
         }
     });
 
@@ -1570,19 +1681,28 @@ fn status_response_json(line: &str) -> Option<String> {
 }
 
 fn append_task_history_blocking(task_key: &str, output: &str) {
-    if output.is_empty() || is_terminal_task_key(task_key) {
+    if output.is_empty() {
         return;
     }
 
     let mut app = APP_DATA.blocking_write();
+    app.append_task_history(task_key, output.as_bytes());
+}
 
-    if let Some(task) = app.tasks.get_mut(task_key) {
-        task.history.extend_from_slice(output.as_bytes());
-    }
+fn task_last_activity_blocking(task_key: &str) -> Option<Arc<AtomicU64>> {
+    APP_DATA
+        .blocking_read()
+        .tasks
+        .get(task_key)
+        .map(|task| task.last_activity.clone())
 }
 
 fn broadcast_task_stdout(task_key: &str, stdout_tx: &broadcast::Sender<String>, line: String) {
     append_task_history_blocking(task_key, line.as_str());
+
+    if let Some(last_activity) = task_last_activity_blocking(task_key) {
+        mark_activity(&last_activity);
+    }
 
     if let Some(payload) = stdout_response_json(line) {
         let _ = stdout_tx.send(payload);
@@ -1641,6 +1761,10 @@ fn broadcast_terminal_update(
     chunk: &str,
 ) {
     append_task_history_blocking(task_key, chunk);
+
+    if let Some(last_activity) = task_last_activity_blocking(task_key) {
+        mark_activity(&last_activity);
+    }
 
     let Some(payload) = build_terminal_action_payload(state, chunk) else {
         println!("Failed to build response package.");
@@ -1702,6 +1826,7 @@ async fn start_build(
     let (stdout_tx, _) = broadcast::channel::<String>(200);
 
     let child = Arc::new(StdRwLock::new(child));
+    let last_activity = Arc::new(AtomicU64::new(now_unix_seconds()));
 
     let reader = match pty_pair.master.try_clone_reader() {
         Ok(reader) => reader,
@@ -1731,12 +1856,29 @@ async fn start_build(
         }
     };
 
-    register_process(&action, child.clone(), input_tx.clone(), stdout_tx.clone()).await;
+    register_process(
+        &action,
+        child.clone(),
+        input_tx.clone(),
+        stdout_tx.clone(),
+        last_activity.clone(),
+    )
+    .await;
+
+    spawn_idle_timeout_watchdog(
+        task_key.clone(),
+        child.clone(),
+        stdout_tx.clone(),
+        last_activity.clone(),
+    );
+
     flush_pending_stdin(task_key.as_str(), stdin_state.clone()).await;
     drop(pty_pair.slave);
 
     let (sender, mut receiver) = mpsc::channel::<OutputPacket>(100);
     let tx = sender.clone();
+
+    let last_activity_reader = last_activity.clone();
 
     std::thread::spawn(move || {
         let mut reader = reader;
@@ -1774,6 +1916,7 @@ async fn start_build(
                     }
 
                     state.feed(&chunk);
+                    mark_activity(&last_activity_reader);
 
                     if !queue_terminal_update(&tx, &state, chunk) {
                         break;
@@ -1800,6 +1943,8 @@ async fn start_build(
     });
 
     // Write WebSocket input to PTY.
+    let last_activity_writer = last_activity.clone();
+
     std::thread::spawn(move || {
         while let Some(data) = input_rx.blocking_recv() {
             if writer.write_all(data.as_bytes()).is_err() {
@@ -1809,6 +1954,8 @@ async fn start_build(
             if writer.flush().is_err() {
                 break;
             }
+
+            mark_activity(&last_activity_writer);
         }
     });
 

@@ -5,6 +5,7 @@ mod abort;
 mod app;
 mod build;
 mod clean;
+mod custom;
 mod fetch;
 mod index;
 mod release;
@@ -38,6 +39,7 @@ async fn main() -> std::io::Result<()> {
             .service(terminal::terminal)
             .service(run::run)
             .service(status::status)
+            .service(custom::custom)
             .route("/ws", web::get().to(runner::websocket))
     })
     .bind(("127.0.0.1", 2003))?

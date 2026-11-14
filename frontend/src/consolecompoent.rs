@@ -29,6 +29,7 @@ struct Console {
     #[attribute]
     has_connected: bool,
 
+    // internal render state for terminal, not an attribute
     ansi_render_state: Option<color::AnsiRenderState>,
 }
 
@@ -41,26 +42,36 @@ impl Component for ConsoleComponent {
         log!("Connected:", &id);
         self.render();
         focus_console_output(&id);
-        ensure_abort_on_exit_handlers();
+
+        if action == "terminal" {
+            ensure_abort_on_exit_handlers();
+        }
 
         if action.is_empty() || project.is_empty() {
             return;
         }
 
         if action == "terminal" {
+            spawn_local(async move {
+                connect_terminal(project).await;
+            });
             return;
         }
 
-        let component_id = id.clone();
-
         spawn_local(async move {
-            start_and_connect_console_view(component_id, action.as_str(), project.as_str()).await;
+            ensure_builder_task_connected(action.as_str(), project.as_str()).await;
         });
     }
 
     fn disconnected(&self) {
         let id = self.get_id();
         log!("Disconnected:", &id);
+
+        let action: String = self.get_attribute("action").unwrap_or_default();
+
+        if action != "terminal" {
+            return;
+        }
 
         let task_key: String = self.get_attribute("task_key").unwrap_or_default();
 
@@ -107,31 +118,12 @@ fn focus_console_output(component_id: &str) {
 impl ConsoleComponent {
     fn handle_connect(&self, new_value: &str) {
         let component_id = self.get_id();
-        let component = get_element_by_id(&component_id);
-
-        if component.is_none() {
-            log!("No component");
-            return;
-        }
-
-        let component = component.unwrap();
 
         if new_value.is_empty() {
-            if component.set_attribute("task_key", "").is_err() {
-                log!("Failed to set task_key attribute on console component.");
-            }
-
             return;
         }
 
-        if component.set_attribute("task_key", new_value).is_err() {
-            log!("Failed to set task_key attribute on console component.");
-            return;
-        }
-
-        let has_connected = component
-            .get_attribute("has_connected")
-            .is_some_and(|value| value == "true");
+        let has_connected: bool = self.get_attribute("has_connected").unwrap_or(false);
 
         if !has_connected {
             let output_id = format!("{}-output", component_id);
@@ -188,7 +180,7 @@ impl ConsoleComponent {
         };
 
         let content = html! {{
-            <h1 id="status">Loading</h1>
+            <h1 id="status">Disconnected</h1>
             <p>Project Folder: $(project)</p>
             <pre id="$(id)-output" class="$(output_class)" tabindex="0">
                 <rust>
@@ -301,11 +293,24 @@ async fn abort_task(task_key: Option<&str>, project: Option<&str>) -> bool {
         return false;
     };
 
-    Request::get(endpoint.as_str()).send().await.is_ok()
+    match Request::get(endpoint.as_str()).send().await {
+        Ok(response) => response.ok(),
+        Err(_) => false,
+    }
+}
+
+fn console_task_has_exited() -> bool {
+    get_element("console-component")
+        .and_then(|component| component.get_attribute("task_exited"))
+        .is_some_and(|value| value == "true")
 }
 
 #[callback("abort")]
 async fn abort_current_task(project: String) {
+    if console_task_has_exited() {
+        return;
+    }
+
     let task_key: Option<String> =
         get_element("console-component").and_then(|component| component.get_attribute("task_key"));
     let task_key = task_key.filter(|value| !value.is_empty());
@@ -369,9 +374,11 @@ async fn start_task(project: &str, action: &str) -> Option<String> {
     }
 
     if let Some(message) = payload.message {
-        log!("/run failed", message);
+        log!("/run failed", &message);
+        try_inner_text("#status", message.as_str());
     } else {
         log!("/run failed");
+        try_inner_text("#status", "Failed to start task");
     }
 
     None
@@ -411,6 +418,10 @@ async fn connect_terminal(project: String) {
         log!("Failed to set task_key attribute on terminal console.");
     }
 
+    if console.set_attribute("task_exited", "false").is_err() {
+        log!("Failed to set task_exited attribute on terminal console.");
+    }
+
     if console.set_attribute("connect", task_key.as_str()).is_err() {
         log!("Failed to set connect attribute on terminal console.");
     }
@@ -422,15 +433,92 @@ async fn connect_terminal(project: String) {
     focus_console_output(&console_id);
 }
 
-async fn start_and_connect_console_view(id: String, action: &str, project: &str) {
+#[callback("startTask")]
+async fn start_task_from_nav(project: String, action: String) {
+    start_and_connect_console_view(action.as_str(), project.as_str()).await;
+}
+
+fn build_task_key(project: &str, action: &str) -> String {
+    format!("{}-{}", action, project)
+}
+
+#[derive(Deserialize)]
+struct StatusResponse {
+    project: String,
+    task: String,
+}
+
+async fn fetch_running_builder_task_key(action: &str, project: &str) -> Option<String> {
+    let response = Request::get("/status").send().await.ok()?;
+    let body = response.text().await.ok()?;
+    let status: StatusResponse = serde_json::from_str(body.as_str()).ok()?;
+
+    if status.task.is_empty() || status.project.is_empty() || status.task == "terminal" {
+        return None;
+    }
+
+    if status.task != action || status.project != project {
+        return None;
+    }
+
+    Some(build_task_key(
+        status.project.as_str(),
+        status.task.as_str(),
+    ))
+}
+
+async fn ensure_builder_task_connected(action: &str, project: &str) {
+    let Some(component) = get_element("console-component") else {
+        return;
+    };
+
+    let id = component
+        .get_attribute("id")
+        .unwrap_or_else(|| "console-component".to_string());
+
+    if let Some(task_key) = fetch_running_builder_task_key(action, project).await {
+        let _ = component.set_attribute("connect", "");
+
+        if component
+            .set_attribute("task_key", task_key.as_str())
+            .is_err()
+        {
+            log!("Failed to set task_key attribute on console component.");
+        }
+
+        if component.set_attribute("task_exited", "false").is_err() {
+            log!("Failed to set task_exited attribute on console component.");
+        }
+
+        if component
+            .set_attribute("connect", task_key.as_str())
+            .is_err()
+        {
+            log!("Failed to set connect attribute on console component.");
+        }
+
+        focus_console_output(&id);
+        return;
+    }
+
+    start_and_connect_console_view(action, project).await;
+}
+
+async fn start_and_connect_console_view(action: &str, project: &str) {
     let Some(task_key) = start_task(project, action).await else {
         return;
     };
 
-    let Some(component) = get_element_by_id(&id) else {
-        log!("No console component found.", id);
+    let Some(component) = get_element("console-component") else {
+        log!("No console component found.");
         return;
     };
+
+    let id = component
+        .get_attribute("id")
+        .unwrap_or_else(|| "console-component".to_string());
+
+    let _ = component.set_attribute("connect", "");
 
     if component
         .set_attribute("task_key", task_key.as_str())
@@ -439,12 +527,18 @@ async fn start_and_connect_console_view(id: String, action: &str, project: &str)
         log!("Failed to set task_key attribute on console component.");
     }
 
+    if component.set_attribute("task_exited", "false").is_err() {
+        log!("Failed to set task_exited attribute on console component.");
+    }
+
     if component
         .set_attribute("connect", task_key.as_str())
         .is_err()
     {
         log!("Failed to set connect attribute on console component.");
     }
+
+    focus_console_output(&id);
 }
 
 async fn connect_console_view(id: String, task_key: String) {
@@ -452,7 +546,7 @@ async fn connect_console_view(id: String, task_key: String) {
 
     if ws.is_err() {
         log!("Failed to open websocket");
-        try_inner_text("#status", "disconnected");
+        try_inner_text("#status", "Disconnected");
         return;
     }
 
@@ -508,7 +602,7 @@ async fn connect_console_view(id: String, task_key: String) {
         }
     }
 
-    try_inner_text("#status", "disconnected");
+    try_inner_text("#status", "Disconnected");
 }
 
 fn single_char_key(key: &str) -> Option<char> {
@@ -647,7 +741,7 @@ fn process_build_output(component_id: &str, chunk: String) {
     let resp = resp.unwrap();
 
     if resp.status.is_some() {
-        handle_status(resp);
+        handle_status(component_id, resp);
         return;
     }
 
@@ -682,7 +776,7 @@ fn process_build_output(component_id: &str, chunk: String) {
     }
 }
 
-fn handle_status(line: ActionResponse) {
+fn handle_status(component_id: &str, line: ActionResponse) {
     if line.status.is_none() {
         log!("No status");
         return;
@@ -690,15 +784,26 @@ fn handle_status(line: ActionResponse) {
 
     let status = line.status.unwrap();
 
+    let Some(component) = get_element_by_id(component_id) else {
+        log!(
+            "No console component found for status update.",
+            component_id
+        );
+        return;
+    };
+
     match status.as_str() {
         "status: RUNNING" => {
-            try_inner_text("#status", "Task: Running");
+            try_inner_text("#status", "Task Status: Running");
+            let _ = component.set_attribute("task_exited", "false");
         }
         "status: FAILED" => {
             try_inner_text("#status", "Task: Failed");
+            let _ = component.set_attribute("task_exited", "true");
         }
         "status: SUCCESS" => {
             try_inner_text("#status", "Task Finished Succesfully");
+            let _ = component.set_attribute("task_exited", "true");
         }
         _ => {
             log!("Unknown status from runner:", status.as_str());

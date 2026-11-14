@@ -1,4 +1,4 @@
-use crate::rest::BuildCommands;
+use crate::rest::{BuildCommands, CustomCommand};
 
 use gloo_net::http::Request;
 use kaja_web::prelude::*;
@@ -20,6 +20,8 @@ struct ProjectStatus {
     pub clean: String,
     #[attribute]
     pub terminal: String,
+    #[attribute]
+    pub custom: Vec<CustomCommand>,
 }
 
 impl Component for ProjectStatusComponent {
@@ -53,6 +55,8 @@ impl Component for ProjectStatusComponent {
             let release = settings.release.unwrap_or_default();
             let clean = settings.clean.unwrap_or_default();
             let terminal = settings.terminal.unwrap_or_default();
+            let custom = settings.custom_comands.unwrap_or_default();
+            let custom_json = serde_json::to_string(&custom).unwrap_or_else(|_| "[]".to_string());
 
             element.set_attribute("git", git.as_str());
             element.set_attribute("build", build.as_str());
@@ -60,6 +64,7 @@ impl Component for ProjectStatusComponent {
             element.set_attribute("release", release.as_str());
             element.set_attribute("clean", clean.as_str());
             element.set_attribute("terminal", terminal.as_str());
+            element.set_attribute("custom", custom_json.as_str());
         });
     }
 
@@ -85,6 +90,7 @@ impl ProjectStatusComponent {
         };
 
         let project: String = self.get_attribute("project").unwrap_or_default();
+        let custom_actions: Vec<CustomCommand> = self.get_attribute("custom").unwrap_or_default();
 
         let content = html! {{
             <p>$project</p>
@@ -94,7 +100,7 @@ impl ProjectStatusComponent {
 
                     if !attr.is_empty() {
                         <markup>
-                            <button class="project-action-button" onclick="window.location.href='/fetch?project=$project'">Git Fetch</button>
+                            <button class="project-action-button" onclick="goTo('/fetch?project=$project')">Git Fetch</button>
                         </markup>
                     }
                 </rust>
@@ -104,7 +110,7 @@ impl ProjectStatusComponent {
 
                     if !attr.is_empty() {
                         <markup>
-                            <button class="project-action-button" onclick="window.location.href='/build?project=$project'">Build</button>
+                            <button class="project-action-button" onclick="goTo('/build?project=$project')">Build</button>
                         </markup>
                     }
                 </rust>
@@ -114,7 +120,7 @@ impl ProjectStatusComponent {
 
                     if !attr.is_empty() {
                         <markup>
-                            <button class="project-action-button" onclick="window.location.href='/test?project=$project'">Test</button>
+                            <button class="project-action-button" onclick="goTo('/test?project=$project')">Test</button>
                         </markup>
                     }
                 </rust>
@@ -124,7 +130,7 @@ impl ProjectStatusComponent {
 
                     if !attr.is_empty() {
                         <markup>
-                            <button class="project-action-button" onclick="window.location.href='/release?project=$project'">Release</button>
+                            <button class="project-action-button" onclick="goTo('/release?project=$project')">Release</button>
                         </markup>
                     }
                 </rust>
@@ -134,7 +140,7 @@ impl ProjectStatusComponent {
 
                     if !attr.is_empty() {
                         <markup>
-                            <button class="project-action-button" onclick="window.location.href='/clean?project=$project'">Clean</button>
+                            <button class="project-action-button" onclick="goTo('/clean?project=$project')">Clean</button>
                         </markup>
                     }
                 </rust>
@@ -144,17 +150,40 @@ impl ProjectStatusComponent {
 
                     if !attr.is_empty() {
                         <markup>
-                            <button class="project-action-button" onclick="window.location.href='/terminal?project=$project'">Terminal</button>
+                            <button class="project-action-button" onclick="goTo('/terminal?project=$project')">Terminal</button>
                         </markup>
                     }
                 </rust>
 
-                <button class="project-action-button" onclick="window.location.href='/settings?project=$project'">Settings</button>
+                <rust>
+                    for custom in &custom_actions {
+                        if let Some(label) = custom.label.as_ref() {
+                            let label = label.trim();
+
+                            if !label.is_empty() {
+                                <markup>
+                                    <button class="project-action-button" onclick="goTo('/custom?project=$(project)&custom_label=$label')">$label</button>
+                                </markup>
+                            }
+                        }
+                    }
+                </rust>
+
+                <button class="project-action-button" onclick="goTo('/settings?project=$project')">Settings</button>
             </div>
         }};
 
         element.set_inner_html(content.as_str());
     }
+}
+
+#[callback("goTo")]
+fn go_to(url: String) {
+    let Some(window) = web_sys::window() else {
+        return;
+    };
+
+    let _ = window.location().set_href(url.as_str());
 }
 
 async fn load_settings(project: &str) -> Option<BuildCommands> {

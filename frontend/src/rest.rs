@@ -18,6 +18,12 @@ pub struct ActionResponse {
     pub cursor_col: Option<usize>,
 }
 
+#[derive(Debug, Default, Serialize, Deserialize, Clone)]
+pub struct CustomCommand {
+    pub label: Option<String>,
+    pub command: Option<String>,
+}
+
 #[derive(Debug, Default, Serialize, Deserialize)]
 pub struct BuildCommands {
     pub git: Option<String>,
@@ -26,4 +32,5 @@ pub struct BuildCommands {
     pub release: Option<String>,
     pub clean: Option<String>,
     pub terminal: Option<String>,
+    pub custom_comands: Option<Vec<CustomCommand>>,
 }

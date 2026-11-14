@@ -1,4 +1,4 @@
-use crate::rest::BuildCommands;
+use crate::rest::{BuildCommands, CustomCommand};
 
 use gloo_net::http::Request;
 use kaja_web::prelude::*;
@@ -19,6 +19,8 @@ struct Settings {
     pub clean: String,
     #[attribute]
     pub terminal: String,
+    #[attribute]
+    pub custom: Vec<CustomCommand>,
 }
 
 impl Component for SettingsComponent {
@@ -53,6 +55,7 @@ impl SettingsComponent {
         let release: String = self.get_attribute("release").unwrap_or_default();
         let clean: String = self.get_attribute("clean").unwrap_or_default();
         let terminal: String = self.get_attribute("terminal").unwrap_or_default();
+        let custom: Vec<CustomCommand> = self.get_attribute("custom").unwrap_or_default();
 
         let content = html! {{
             <p>$(project)</p>
@@ -90,6 +93,33 @@ impl SettingsComponent {
                 <input id="terminal" name="terminal" type="text" value="$(terminal)" />
             </p>
 
+            <rust>
+                for (index, action) in custom.into_iter().enumerate() {
+                    let label = action.label.unwrap_or_default();
+                    let command = action.command.unwrap_or_default();
+
+                    if label.is_empty() || command.is_empty() {
+                        continue;
+                    }
+
+                    let command_id = format!("custom-command-{}", index);
+
+                    <markup>
+                        <p>
+                            <label for="$(command_id)">$(label)</label><br />
+                            <input id="$(command_id)" name="$(command_id)" type="text" value="$(command)" />
+                        </p>
+                    </markup>
+                }
+            </rust>
+
+            <p>
+                <label for="custom">Custom Command</label><br />
+                <input id="custom-label" name="custom-label" type="text" value="" placeholder="Label" /><br>
+                <input id="custom-command" name="custom-command" type="text" value="" placeholder="Command" />
+                <button onclick="addCustomCommand('$id')">Add Custom Command</button>
+            </p>
+
             <button onclick="saveSettings('$id')">Save</button>
         }};
 
@@ -97,29 +127,83 @@ impl SettingsComponent {
     }
 }
 
-#[callback("saveSettings")]
-async fn save_settings(id: String) {
+#[callback("addCustomCommand")]
+async fn add_cusom_command(id: String) {
+    let label = try_get_value("#custom-label");
+    let command = try_get_value("#custom-command");
+
+    if label.is_empty() || command.is_empty() {
+        log!("Not a full command.");
+        return;
+    }
+
     let component = SettingsComponent::get_component(&id);
 
-    if component.is_none() {
+    let Some(component) = component else {
         log!("No component");
         return;
+    };
+
+    {
+        let mut inner = component.borrow_mut();
+        inner.custom.push(CustomCommand {
+            label: Some(label),
+            command: Some(command),
+        });
     }
 
-    let project = component.unwrap().get_attribute("project");
+    component.render();
+}
 
-    if project.is_none() {
+#[callback("saveSettings")]
+async fn save_settings(id: String) {
+    let Some(component) = SettingsComponent::get_component(&id) else {
+        log!("No component");
+        return;
+    };
+
+    let project: Option<String> = component.get_attribute("project");
+    let Some(project) = project else {
         log!("Project is not set in settings.");
         return;
-    }
+    };
 
-    let project: String = project.unwrap();
     let git: String = try_get_value("#git");
     let build: String = try_get_value("#build");
     let test: String = try_get_value("#test");
     let release: String = try_get_value("#release");
     let clean: String = try_get_value("#clean");
     let terminal: String = try_get_value("#terminal");
+    let custom_commands = {
+        let mut inner = component.borrow_mut();
+
+        let updated_commands = inner
+            .custom
+            .iter()
+            .enumerate()
+            .filter_map(|(index, command)| {
+                let label = command.label.as_deref()?.trim();
+                if label.is_empty() {
+                    return None;
+                }
+
+                let selector = format!("#custom-command-{}", index);
+                let input_command = try_get_value(selector.as_str()).trim().to_string();
+
+                if input_command.is_empty() {
+                    return None;
+                }
+
+                Some(CustomCommand {
+                    label: Some(label.to_string()),
+                    command: Some(input_command),
+                })
+            })
+            .collect::<Vec<CustomCommand>>();
+
+        inner.custom = updated_commands.clone();
+        updated_commands
+    };
 
     let settings = BuildCommands {
         git: Some(git),
@@ -128,6 +212,7 @@ async fn save_settings(id: String) {
         release: Some(release),
         clean: Some(clean),
         terminal: Some(terminal),
+        custom_comands: Some(custom_commands),
     };
 
     let endpont = format!("/save-settings?project={}", project);
@@ -144,4 +229,6 @@ async fn save_settings(id: String) {
     } else {
         try_inner_text("#save-status", "Failed to save settings.");
     }
+
+    component.render();
 }

@@ -26,6 +26,8 @@ pub async fn settings(params: web::Query<ProjectGetParams>) -> impl Responder {
         }
     }
 
+    let commands_json = serde_json::to_string(&settings.custom_comands).unwrap();
+
     let content = html! {{
         <!doctype html>
         <html lang="en">
@@ -51,6 +53,7 @@ pub async fn settings(params: web::Query<ProjectGetParams>) -> impl Responder {
                         release="$(settings.release.unwrap_or_default())"
                         clean="$(settings.clean.unwrap_or_default())"
                         terminal="$(settings.terminal.unwrap_or_default())"
+                        custom="$(commands_json)"
                     >
                     </project-settings>
                 </main>
@@ -66,10 +69,19 @@ pub async fn settings(params: web::Query<ProjectGetParams>) -> impl Responder {
 #[actix_web::post("/save-settings")]
 pub async fn save_settings(
     params: web::Query<ProjectGetParams>,
-    build_commands: web::Json<BuildCommands>,
+    mut build_commands: web::Json<BuildCommands>,
 ) -> impl Responder {
     let mut project_dir = PathBuf::from(params.project.clone());
     project_dir.push("ci.json");
+
+    if let Some(custom_commands) = build_commands.custom_comands.as_mut() {
+        custom_commands.retain(|custom_command| {
+            custom_command
+                .command
+                .as_deref()
+                .is_some_and(|command| !command.trim().is_empty())
+        });
+    }
 
     let update_settings = serde_json::to_string_pretty(&build_commands);
 

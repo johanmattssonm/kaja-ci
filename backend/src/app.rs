@@ -4,13 +4,13 @@ use std::sync::LazyLock;
 use std::sync::{Arc, RwLock as StdRwLock};
 use tokio::sync::{RwLock, broadcast, mpsc};
 
-// The app can have one builder running and many terminals attched.
-
+// The app can have one builder running and many terminals attached.
 pub struct AppData {
     pub running_project: String,
     pub running_task_name: String,
     pub running_task: Option<Task>,
     pub tasks: HashMap<String, Task>,
+    pub task_history: HashMap<String, Vec<u8>>,
 }
 
 #[derive(Clone)]
@@ -19,11 +19,13 @@ pub struct Task {
     pub running_command: Option<Arc<StdRwLock<Box<dyn Child + Send + Sync>>>>,
     pub stdin_tx: Option<mpsc::Sender<String>>,
     pub stdout_tx: Option<broadcast::Sender<String>>,
+    pub last_activity: Arc<std::sync::atomic::AtomicU64>,
 }
 
 pub static APP_DATA: LazyLock<RwLock<AppData>> = LazyLock::new(|| {
     RwLock::new(AppData {
         tasks: HashMap::new(), //
+        task_history: HashMap::new(),
         running_project: String::new(),
         running_task: None,
         running_task_name: String::new(),
@@ -32,7 +34,16 @@ pub static APP_DATA: LazyLock<RwLock<AppData>> = LazyLock::new(|| {
 
 impl AppData {
     pub fn has_running_task(&self) -> bool {
-        self.running_task.is_some()
+        if self.running_task_name.is_empty() || self.running_project.is_empty() {
+            return false;
+        }
+
+        let running_key = format!("{}-{}", self.running_task_name, self.running_project);
+
+        self.tasks
+            .get(running_key.as_str())
+            .and_then(|task| task.running_command.as_ref())
+            .is_some()
     }
 
     pub fn running_project(&self) -> String {
@@ -55,6 +66,7 @@ impl AppData {
         command: Arc<StdRwLock<Box<dyn Child + Send + Sync>>>,
         stdin_tx: mpsc::Sender<String>,
         stdout_tx: broadcast::Sender<String>,
+        last_activity: Arc<std::sync::atomic::AtomicU64>,
     ) -> Result<String, String> {
         let Some(task_type) = task_type else {
             return Err("No task_type for process".to_string());
@@ -68,11 +80,14 @@ impl AppData {
         let key = task_key.unwrap_or_else(|| format!("{}-{}", task_type, project_folder));
         println!("Starting task, key: {}", key);
 
+        self.task_history.insert(key.clone(), Vec::new());
+
         let task = Task {
             history: Vec::new(),
             running_command: Some(command),
             stdin_tx: Some(stdin_tx),
             stdout_tx: Some(stdout_tx),
+            last_activity,
         };
 
         if task_type != "terminal" {
@@ -114,16 +129,25 @@ impl AppData {
     pub fn drop_task_by_key(&mut self, key: &str) -> Result<(), String> {
         println!("Dropping task, key: {}", key);
 
-        let Some(mut task) = self.tasks.remove(key) else {
+        let running_key = format!("{}-{}", self.running_task_name, self.running_project);
+
+        let Some(task) = self.tasks.get_mut(key) else {
             println!("Task was not running.");
+
+            if running_key == key {
+                self.running_task = None;
+                self.running_task_name.clear();
+                self.running_project.clear();
+                return Ok(());
+            }
+
             return Err("No task running".to_string());
         };
 
         task.running_command = None;
         task.stdin_tx = None;
         task.stdout_tx = None;
-
-        let running_key = format!("{}-{}", self.running_task_name, self.running_project);
+        self.tasks.remove(key);
 
         if running_key == key {
             self.running_task = None;
@@ -132,5 +156,28 @@ impl AppData {
         }
 
         Ok(())
+    }
+
+    pub fn append_task_history(&mut self, key: &str, output: &[u8]) {
+        if output.is_empty() {
+            return;
+        }
+
+        self.task_history
+            .entry(key.to_string())
+            .or_default()
+            .extend_from_slice(output);
+
+        if let Some(task) = self.tasks.get_mut(key) {
+            task.history.extend_from_slice(output);
+        }
+    }
+
+    pub fn task_history(&self, key: &str) -> Option<Vec<u8>> {
+        if let Some(history) = self.task_history.get(key) {
+            return Some(history.clone());
+        }
+
+        self.tasks.get(key).map(|task| task.history.clone())
     }
 }
