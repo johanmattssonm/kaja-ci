@@ -13,7 +13,7 @@ body {
 }
 
 .top-bar {
-    width: min(1185px, 100%);
+    width: min(1197px, 100%);
     margin: 0 auto 16px;
     display: flex;
     align-items: center;

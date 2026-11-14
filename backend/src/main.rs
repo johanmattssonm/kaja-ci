@@ -19,19 +19,43 @@ mod terminal;
 mod test;
 
 pub struct AppData {
+    running_project: String,
+    running_task: Option<Task>,
     tasks: HashMap<String, Task>,
 }
 
-pub struct Task {
+struct Task {
+    history: Vec<u8>,
     running_command: Option<Arc<StdRwLock<Box<dyn Child + Send + Sync>>>>,
-    output_lines: Vec<String>,
 }
 
 pub static APP_DATA: LazyLock<RwLock<AppData>> = LazyLock::new(|| {
     RwLock::new(AppData {
-        tasks: HashMap::new(),
+        tasks: HashMap::new(), //
+        running_project: String::new(),
+        running_task: None,
     })
 });
+
+impl AppData {
+    fn start_task(
+        &mut self,
+        task_type: String,
+        project_folder: String,
+        command: Arc<StdRwLock<Box<dyn Child + Send + Sync>>>,
+    ) {
+        let key = format!("{}-{}", task_type, project_folder);
+
+        println!("Starting task, key: {}", key);
+
+        let task = Task {
+            history: Vec::new(),
+            running_command: Some(command),
+        };
+
+        self.tasks.insert(key, task);
+    }
+}
 
 #[actix_web::main]
 async fn main() -> std::io::Result<()> {

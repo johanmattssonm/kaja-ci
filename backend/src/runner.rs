@@ -933,7 +933,7 @@ async fn regiter_process(action: &Action, process: Arc<StdRwLock<Box<dyn Child +
         folder,
         Task {
             running_command: Some(process),
-            output_lines: Vec::new(),
+            history: Vec::new(),
         },
     );
 }
@@ -950,7 +950,7 @@ async fn unregister_process(action: &Action) {
         folder,
         Task {
             running_command: None,
-            output_lines: Vec::new(),
+            history: Vec::new(),
         },
     );
 }
