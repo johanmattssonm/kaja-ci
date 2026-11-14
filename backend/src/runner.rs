@@ -75,8 +75,28 @@ impl TerminalScreen {
     }
 
     fn feed(&mut self, input: &str) {
-        for b in input.bytes() {
-            self.process_byte(b);
+        for ch in input.chars() {
+            self.process_char(ch);
+        }
+    }
+
+    fn process_char(&mut self, ch: char) {
+        if ch.is_ascii() {
+            self.process_byte(ch as u8);
+            return;
+        }
+
+        match self.escape_state {
+            None => self.put_char(ch),
+            Some(EscapeState::Osc) => {
+                if self.osc_esc_pending {
+                    self.osc_esc_pending = false;
+                }
+            }
+            Some(EscapeState::Esc) | Some(EscapeState::EscIntermediate) => {
+                self.escape_state = None;
+            }
+            Some(EscapeState::Csi) => {}
         }
     }
 
@@ -651,6 +671,46 @@ fn parse_cup(params: &str) -> (usize, usize) {
     (row, col)
 }
 
+fn decode_utf8_chunk(pending: &mut Vec<u8>) -> String {
+    let mut out = String::new();
+
+    loop {
+        if pending.is_empty() {
+            break;
+        }
+
+        match std::str::from_utf8(pending) {
+            Ok(valid) => {
+                out.push_str(valid);
+                pending.clear();
+                break;
+            }
+            Err(err) => {
+                let valid_up_to = err.valid_up_to();
+
+                if valid_up_to > 0 {
+                    let valid = std::str::from_utf8(&pending[..valid_up_to])
+                        .expect("UTF-8 prefix should be valid");
+                    out.push_str(valid);
+                }
+
+                match err.error_len() {
+                    Some(error_len) => {
+                        out.push('\u{fffd}');
+                        pending.drain(..valid_up_to + error_len);
+                    }
+                    None => {
+                        pending.drain(..valid_up_to);
+                        break;
+                    }
+                }
+            }
+        }
+    }
+
+    out
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -689,6 +749,24 @@ mod tests {
         screen.feed("abcd\u{1b}[2DX");
         let text = screen.to_text();
         assert_eq!(text.trim_end(), "abXd");
+    }
+
+    #[test]
+    fn unicode_text_is_rendered() {
+        let mut screen = TerminalScreen::new(1, 16);
+        screen.feed("åäö");
+        assert_eq!(screen.to_text().trim_end(), "åäö");
+    }
+
+    #[test]
+    fn utf8_decoder_handles_split_multibyte_sequences() {
+        let mut pending = vec![0xC3];
+        assert_eq!(decode_utf8_chunk(&mut pending), "");
+        assert_eq!(pending, vec![0xC3]);
+
+        pending.push(0xA5);
+        assert_eq!(decode_utf8_chunk(&mut pending), "å");
+        assert!(pending.is_empty());
     }
 }
 
@@ -974,6 +1052,35 @@ fn wait_for_exit(
     }
 }
 
+fn queue_terminal_update(tx: &mpsc::Sender<String>, state: &TerminalScreen, chunk: String) -> bool {
+    let action = if state.in_alternate_screen() {
+        ActionResponse {
+            stdout: Some(state.to_text()),
+            action: "SCREEN".to_string(),
+            status: None,
+            cursor_row: Some(state.cursor_row),
+            cursor_col: Some(state.cursor_col),
+        }
+    } else {
+        ActionResponse {
+            stdout: Some(chunk),
+            action: "STDOUT".to_string(),
+            status: None,
+            cursor_row: None,
+            cursor_col: Some(state.cursor_col),
+        }
+    };
+
+    let json = serde_json::to_string(&action);
+
+    if json.is_err() {
+        println!("Failed to build response package.");
+        return false;
+    }
+
+    tx.blocking_send(json.unwrap()).is_ok()
+}
+
 async fn start_build(
     session: &mut Session,
     stdin_state: Arc<Mutex<BuildInputState>>,
@@ -1060,40 +1167,40 @@ async fn start_build(
         let mut reader = reader;
         let mut buf = [0_u8; 4096];
         let mut state = TerminalScreen::new(rows as usize, cols as usize);
+        let mut utf8_pending = Vec::new();
 
         loop {
             match reader.read(&mut buf) {
-                Ok(0) => break,
-                Ok(n) => {
-                    let chunk = String::from_utf8_lossy(&buf[..n]).to_string();
-                    state.feed(&chunk);
+                Ok(0) => {
+                    if !utf8_pending.is_empty() {
+                        let mut chunk = decode_utf8_chunk(&mut utf8_pending);
 
-                    let action = if state.in_alternate_screen() {
-                        ActionResponse {
-                            stdout: Some(state.to_text()),
-                            action: "SCREEN".to_string(),
-                            status: None,
-                            cursor_row: Some(state.cursor_row),
-                            cursor_col: Some(state.cursor_col),
+                        if !utf8_pending.is_empty() {
+                            chunk.push_str(&String::from_utf8_lossy(&utf8_pending));
+                            utf8_pending.clear();
                         }
-                    } else {
-                        ActionResponse {
-                            stdout: Some(chunk),
-                            action: "STDOUT".to_string(),
-                            status: None,
-                            cursor_row: None,
-                            cursor_col: Some(state.cursor_col),
+
+                        if !chunk.is_empty() {
+                            state.feed(&chunk);
+                            if !queue_terminal_update(&tx, &state, chunk) {
+                                break;
+                            }
                         }
-                    };
-
-                    let json = serde_json::to_string(&action);
-
-                    if json.is_err() {
-                        println!("Failed to build response package.");
-                        break;
                     }
 
-                    if tx.blocking_send(json.unwrap()).is_err() {
+                    break;
+                }
+                Ok(n) => {
+                    utf8_pending.extend_from_slice(&buf[..n]);
+                    let chunk = decode_utf8_chunk(&mut utf8_pending);
+
+                    if chunk.is_empty() {
+                        continue;
+                    }
+
+                    state.feed(&chunk);
+
+                    if !queue_terminal_update(&tx, &state, chunk) {
                         break;
                     }
                 }

@@ -984,6 +984,22 @@ mod tests {
     }
 
     #[test]
+    fn unicode_text_is_preserved_in_streaming_output() {
+        let mut state = AnsiRenderState::default();
+        ansi_to_html_streaming("åäö", &mut state);
+        assert_eq!(render_buffer(&state), "åäö");
+    }
+
+    #[test]
+    fn unicode_text_is_preserved_when_ansi_sequences_are_present() {
+        let mut state = AnsiRenderState::default();
+        ansi_to_html_streaming("\u{1b}[32måäö\u{1b}[0m", &mut state);
+        let out = render_buffer(&state);
+
+        assert!(out.contains("åäö"));
+    }
+
+    #[test]
     fn nano_style_control_shortcuts_are_rendered_in_inverse_spans() {
         let rendered = render_terminal_screen("^X Exit  ^O WriteOut");
 

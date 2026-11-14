@@ -150,11 +150,23 @@ async fn connect_console_view(id: String, action: &str, project: &str) {
     }
 }
 
+fn single_char_key(key: &str) -> Option<char> {
+    let mut chars = key.chars();
+    let ch = chars.next()?;
+
+    if chars.next().is_some() {
+        None
+    } else {
+        Some(ch)
+    }
+}
+
 fn key_to_terminal_input(event: &web_sys::KeyboardEvent) -> Option<String> {
+    let key = event.key();
+
     if event.ctrl_key() {
-        let key = event.key();
-        if key.len() == 1 {
-            let ch = key.chars().next()?.to_ascii_lowercase();
+        if let Some(ch) = single_char_key(&key) {
+            let ch = ch.to_ascii_lowercase();
             if ch.is_ascii_lowercase() {
                 let code = (ch as u8) - b'a' + 1;
                 return Some((code as char).to_string());
@@ -167,7 +179,7 @@ fn key_to_terminal_input(event: &web_sys::KeyboardEvent) -> Option<String> {
         };
     }
 
-    match event.key().as_str() {
+    match key.as_str() {
         "Enter" => Some("\r".to_string()),
         "Backspace" => Some("\u{7f}".to_string()),
         "Tab" => Some("\t".to_string()),
@@ -181,7 +193,7 @@ fn key_to_terminal_input(event: &web_sys::KeyboardEvent) -> Option<String> {
         "PageUp" => Some("\u{1b}[5~".to_string()),
         "PageDown" => Some("\u{1b}[6~".to_string()),
         "Delete" => Some("\u{1b}[3~".to_string()),
-        key if key.len() == 1 => Some(key.to_string()),
+        key if single_char_key(key).is_some() => Some(key.to_string()),
         _ => None,
     }
 }
@@ -318,5 +330,28 @@ fn handle_status(line: ActionResponse) {
         _ => {
             log!("Unknown status from runner:", status.as_str());
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::single_char_key;
+
+    #[test]
+    fn single_char_key_accepts_ascii_character() {
+        assert_eq!(single_char_key("a"), Some('a'));
+    }
+
+    #[test]
+    fn single_char_key_accepts_unicode_character() {
+        assert_eq!(single_char_key("å"), Some('å'));
+        assert_eq!(single_char_key("ä"), Some('ä'));
+        assert_eq!(single_char_key("ö"), Some('ö'));
+    }
+
+    #[test]
+    fn single_char_key_rejects_longer_keys() {
+        assert_eq!(single_char_key("Enter"), None);
+        assert_eq!(single_char_key("ab"), None);
     }
 }
