@@ -71,7 +71,7 @@ impl SettingsComponent {
             <p>
                 <div class="setting-row-label">
                     <input id="default-git" type="checkbox" class="setting-default-checkbox" />
-                    <label for="git">Git command</label>
+                    <label for="default-git">Git command</label>
                 </div>
                 <input id="git" name="git" type="text" value="$(git)" />
             </p>
@@ -79,7 +79,7 @@ impl SettingsComponent {
             <p>
                 <div class="setting-row-label">
                     <input id="default-build" type="checkbox" class="setting-default-checkbox" />
-                    <label for="build">Build command</label>
+                    <label for="default-build">Build command</label>
                 </div>
                 <input id="build" name="build" type="text" value="$(build)" />
             </p>
@@ -87,7 +87,7 @@ impl SettingsComponent {
             <p>
                 <div class="setting-row-label">
                     <input id="default-test" type="checkbox" class="setting-default-checkbox" />
-                    <label for="test">Test command</label>
+                    <label for="default-test">Test command</label>
                 </div>
                 <input id="test" name="test" type="text" value="$(test)" />
             </p>
@@ -95,7 +95,7 @@ impl SettingsComponent {
             <p>
                 <div class="setting-row-label">
                     <input id="default-release" type="checkbox" class="setting-default-checkbox" />
-                    <label for="release">Release command</label>
+                    <label for="default-release">Release command</label>
                 </div>
                 <input id="release" name="release" type="text" value="$(release)" />
             </p>
@@ -103,7 +103,7 @@ impl SettingsComponent {
             <p>
                 <div class="setting-row-label">
                     <input id="default-clean" type="checkbox" class="setting-default-checkbox" />
-                    <label for="clean">Clean command</label>
+                    <label for="default-clean">Clean command</label>
                 </div>
                 <input id="clean" name="clean" type="text" value="$(clean)" />
             </p>
@@ -111,7 +111,7 @@ impl SettingsComponent {
             <p>
                 <div class="setting-row-label">
                     <input id="default-terminal" type="checkbox" class="setting-default-checkbox" />
-                    <label for="terminal">Terminal command</label>
+                    <label for="default-terminal">Terminal command</label>
                 </div>
                 <input id="terminal" name="terminal" type="text" value="$(terminal)" />
             </p>
@@ -132,7 +132,7 @@ impl SettingsComponent {
                         <p>
                             <div class="setting-row-label">
                                 <input id="$(default_id)" type="checkbox" class="setting-default-checkbox" />
-                                <label for="$(command_id)">$(label)</label>
+                                <label for="$(default_id)">$(label)</label>
                             </div>
                             <input id="$(command_id)" name="$(command_id)" type="text" value="$(command)" />
                         </p>

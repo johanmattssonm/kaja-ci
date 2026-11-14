@@ -44,6 +44,7 @@ pub async fn settings(params: web::Query<ProjectGetParams>) -> impl Responder {
             <body>
                 <nav class="top-bar" aria-label="Primary">
                     <a class="top-bar-link" href="/">Home</a>
+                    <a class="top-bar-link" onclick="saveSettings(document.querySelector('project-settings')?.id || '')">Save</a>
                 </nav>
 
                 <main>

@@ -40,7 +40,7 @@ pub struct RunGetParams {
 
 #[derive(Debug)]
 pub enum RunTaskError {
-    AlreadyRunning,
+    AlreadyRunning(String),
     InvalidProjectFolder,
     NoCommandConfigured(String),
     Internal(String),
@@ -49,7 +49,9 @@ pub enum RunTaskError {
 impl Display for RunTaskError {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         match self {
-            Self::AlreadyRunning => write!(f, "There is already a task running."),
+            Self::AlreadyRunning(_) => {
+                write!(f, "There is already a task running.")
+            }
             Self::InvalidProjectFolder => write!(f, "Can't find writable project folder."),
             Self::NoCommandConfigured(action_name) => {
                 write!(f, "No command configured for action '{}'.", action_name)
@@ -1342,6 +1344,7 @@ async fn register_process(
         Some(action.action.clone()),
         action.folder.clone(),
         None,
+        None,
         process,
         stdin_tx,
         stdout_tx,
@@ -1415,10 +1418,11 @@ fn spawn_idle_timeout_watchdog(
 pub async fn start_run_task(
     project_folder: String,
     run_task_key: String,
+    raw_history_file_name: Option<String>,
 ) -> Result<String, RunTaskError> {
     let action_name = run_task_key;
 
-    start_detached_action(action_name.as_str(), project_folder).await
+    start_detached_action(action_name.as_str(), project_folder, raw_history_file_name).await
 }
 
 async fn check_requested_task_state(
@@ -1436,8 +1440,8 @@ async fn check_requested_task_state(
         return Ok(Some(requested_task_key.to_string()));
     }
 
-    if app.has_running_task() {
-        return Err(RunTaskError::AlreadyRunning);
+    if let Some(running_task_key) = app.running_builder_task_key() {
+        return Err(RunTaskError::AlreadyRunning(running_task_key));
     }
 
     Ok(None)
@@ -1446,6 +1450,7 @@ async fn check_requested_task_state(
 async fn start_detached_action(
     action_name: &str,
     project_folder: String,
+    raw_history_file_name: Option<String>,
 ) -> Result<String, RunTaskError> {
     if !folder_exists(project_folder.as_str()) {
         return Err(RunTaskError::InvalidProjectFolder);
@@ -1523,6 +1528,7 @@ async fn start_detached_action(
             Some(action_name.clone()),
             Some(project_folder.clone()),
             Some(requested_task_key.clone()),
+            raw_history_file_name,
             child.clone(),
             input_tx,
             stdout_tx.clone(),
@@ -1636,7 +1642,7 @@ async fn start_detached_action(
 
         let ok = if let Ok(status) = status {
             let exit_code = status.exit_code();
-            let out = format!("Task finished, exit code: {:?}", exit_code);
+            let out = format!("Task finished, exit code: {:?}\n", exit_code);
             broadcast_task_stdout(task_key_exit.as_str(), &stdout_tx_exit, out);
 
             if exit_code == 0 {
@@ -1981,7 +1987,7 @@ async fn start_build(
 
     if let Ok(status) = status {
         let exit_code = status.exit_code();
-        let out = format!("Task finished, exit code: {:?}", exit_code);
+        let out = format!("Task finished, exit code: {:?}\n", exit_code);
 
         send_stdout_for_task(session, task_key.as_str(), out.as_str()).await;
 

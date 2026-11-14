@@ -1,5 +1,10 @@
+use chrono::{Local, SecondsFormat};
 use portable_pty::Child;
+use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
+use std::fs::{self, OpenOptions};
+use std::io::Write;
+use std::path::{Path, PathBuf};
 use std::sync::LazyLock;
 use std::sync::{Arc, RwLock as StdRwLock};
 use tokio::sync::{RwLock, broadcast, mpsc};
@@ -13,6 +18,7 @@ pub struct AppData {
     pub running_task: Option<Task>,
     pub tasks: HashMap<String, Task>,
     pub task_history: HashMap<String, Vec<u8>>,
+    pub task_history_files: HashMap<String, TaskHistoryFiles>,
 }
 
 #[derive(Clone)]
@@ -28,11 +34,34 @@ pub static APP_DATA: LazyLock<RwLock<AppData>> = LazyLock::new(|| {
     RwLock::new(AppData {
         tasks: HashMap::new(), //
         task_history: HashMap::new(),
+        task_history_files: HashMap::new(),
         running_project: String::new(),
         running_task: None,
         running_task_name: String::new(),
     })
 });
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct TaskHistoryMetadata {
+    pub datestamp: String,
+    pub task_key: String,
+    pub project: String,
+    pub action: String,
+    pub status: String,
+    pub started_at: String,
+    pub finished_at: Option<String>,
+    pub raw_file: String,
+}
+
+#[derive(Clone, Debug)]
+pub struct TaskHistoryFiles {
+    pub datestamp: String,
+    pub raw_path: PathBuf,
+    pub meta_path: PathBuf,
+    pub project: String,
+    pub action: String,
+    pub started_at: String,
+}
 
 impl AppData {
     fn is_task_command_running(task: &Task) -> bool {
@@ -53,13 +82,26 @@ impl AppData {
             .is_some_and(Self::is_task_command_running)
     }
 
-    pub fn has_running_task(&self) -> bool {
-        if self.running_task_name.is_empty() || self.running_project.is_empty() {
-            return false;
-        }
+    fn has_terminal_task_key(task_key: &str) -> bool {
+        task_key.starts_with("terminal-")
+    }
 
-        let running_key = format!("{}-{}", self.running_task_name, self.running_project);
-        self.task_is_running(running_key.as_str())
+    fn find_running_builder_task_key(&self) -> Option<String> {
+        self.tasks.iter().find_map(|(task_key, task)| {
+            if Self::has_terminal_task_key(task_key.as_str()) {
+                return None;
+            }
+
+            if Self::is_task_command_running(task) {
+                return Some(task_key.clone());
+            }
+
+            None
+        })
+    }
+
+    pub fn running_builder_task_key(&self) -> Option<String> {
+        self.find_running_builder_task_key()
     }
 
     pub fn reconcile_running_state(&mut self) {
@@ -101,6 +143,7 @@ impl AppData {
         task_type: Option<String>,
         project_folder: Option<String>,
         task_key: Option<String>,
+        raw_history_file_name: Option<String>,
         command: Arc<StdRwLock<Box<dyn Child + Send + Sync>>>,
         stdin_tx: mpsc::Sender<String>,
         stdout_tx: broadcast::Sender<String>,
@@ -119,6 +162,17 @@ impl AppData {
         println!("Starting task, key: {}", key);
 
         self.task_history.insert(key.clone(), Vec::new());
+
+        if task_type != "terminal"
+            && let Some(files) = create_history_files(
+                key.as_str(),
+                task_type.as_str(),
+                project_folder.as_str(),
+                raw_history_file_name,
+            )
+        {
+            self.task_history_files.insert(key.clone(), files);
+        }
 
         let task = Task {
             history: Vec::new(),
@@ -194,12 +248,31 @@ impl AppData {
                 self.running_task = None;
                 self.running_task_name.clear();
                 self.running_project.clear();
-                send_task_status(
+                let completed_action = status_action
+                    .clone()
+                    .or_else(|| key.split_once('-').map(|(action, _)| action.to_string()))
+                    .unwrap_or_else(|| key.to_string());
+
+                let completed_project = status_project
+                    .clone()
+                    .or_else(|| key.split_once('-').map(|(_, project)| project.to_string()))
+                    .unwrap_or_default();
+
+                write_task_history_completion(
+                    self.task_history_files.get(key),
                     key,
+                    completed_action.as_str(),
+                    completed_project.as_str(),
                     ok.unwrap_or(false),
-                    status_action.as_deref(),
-                    status_project.as_deref(),
                 );
+                if !Self::has_terminal_task_key(key) {
+                    send_task_status(
+                        key,
+                        ok.unwrap_or(false),
+                        status_action.as_deref(),
+                        status_project.as_deref(),
+                    );
+                }
                 return Ok(());
             }
 
@@ -211,18 +284,40 @@ impl AppData {
         task.stdout_tx = None;
         self.tasks.remove(key);
 
+        let completed_action = status_action
+            .clone()
+            .or_else(|| key.split_once('-').map(|(action, _)| action.to_string()))
+            .unwrap_or_else(|| key.to_string());
+
+        let completed_project = status_project
+            .clone()
+            .or_else(|| key.split_once('-').map(|(_, project)| project.to_string()))
+            .unwrap_or_default();
+
+        write_task_history_completion(
+            self.task_history_files.get(key),
+            key,
+            completed_action.as_str(),
+            completed_project.as_str(),
+            ok.unwrap_or(false),
+        );
+
         if running_key == key {
             self.running_task = None;
             self.running_task_name.clear();
             self.running_project.clear();
         }
 
-        send_task_status(
-            key,
-            ok.unwrap_or(false),
-            status_action.as_deref(),
-            status_project.as_deref(),
-        );
+        self.task_history_files.remove(key);
+
+        if !Self::has_terminal_task_key(key) {
+            send_task_status(
+                key,
+                ok.unwrap_or(false),
+                status_action.as_deref(),
+                status_project.as_deref(),
+            );
+        }
 
         Ok(())
     }
@@ -237,6 +332,10 @@ impl AppData {
             .or_default()
             .extend_from_slice(output);
 
+        if let Some(files) = self.task_history_files.get(key) {
+            append_output_to_raw_file(files.raw_path.as_path(), output);
+        }
+
         if let Some(task) = self.tasks.get_mut(key) {
             task.history.extend_from_slice(output);
         }
@@ -248,5 +347,141 @@ impl AppData {
         }
 
         self.tasks.get(key).map(|task| task.history.clone())
+    }
+}
+
+fn history_base_dir() -> PathBuf {
+    if let Ok(home) = std::env::var("HOME") {
+        return PathBuf::from(home).join(".kaja-ci");
+    }
+
+    PathBuf::from(".kaja-ci")
+}
+
+fn create_history_files(
+    task_key: &str,
+    action: &str,
+    project: &str,
+    raw_history_file_name: Option<String>,
+) -> Option<TaskHistoryFiles> {
+    let base_dir = history_base_dir();
+
+    if let Err(err) = fs::create_dir_all(base_dir.as_path()) {
+        println!(
+            "Failed to create history directory {}: {}",
+            base_dir.display(),
+            err
+        );
+        return None;
+    }
+
+    let datestamp = Local::now().format("%Y%m%dT%H%M%S%.3f%z").to_string();
+    let raw_path = raw_history_file_name
+        .filter(|name| !name.trim().is_empty())
+        .map(|name| base_dir.join(name))
+        .unwrap_or_else(|| base_dir.join(format!("{}.raw", datestamp)));
+    let meta_path = base_dir.join(format!("{}.json", datestamp));
+
+    let started_at = Local::now().to_rfc3339_opts(SecondsFormat::Secs, false);
+
+    let files = TaskHistoryFiles {
+        datestamp,
+        raw_path,
+        meta_path,
+        project: project.to_string(),
+        action: action.to_string(),
+        started_at,
+    };
+
+    let metadata = TaskHistoryMetadata {
+        datestamp: files.datestamp.clone(),
+        task_key: task_key.to_string(),
+        project: files.project.clone(),
+        action: files.action.clone(),
+        status: "running".to_string(),
+        started_at: files.started_at.clone(),
+        finished_at: None,
+        raw_file: files.raw_path.to_string_lossy().to_string(),
+    };
+
+    write_metadata(files.meta_path.as_path(), &metadata);
+
+    Some(files)
+}
+
+fn append_output_to_raw_file(path: &Path, output: &[u8]) {
+    let mut file = match OpenOptions::new().create(true).append(true).open(path) {
+        Ok(file) => file,
+        Err(err) => {
+            println!(
+                "Failed to open raw history file {}: {}",
+                path.display(),
+                err
+            );
+            return;
+        }
+    };
+
+    if let Err(err) = file.write_all(output) {
+        println!(
+            "Failed writing raw history file {}: {}",
+            path.display(),
+            err
+        );
+    }
+}
+
+fn write_task_history_completion(
+    files: Option<&TaskHistoryFiles>,
+    task_key: &str,
+    action: &str,
+    project: &str,
+    ok: bool,
+) {
+    let Some(files) = files else {
+        return;
+    };
+
+    let metadata = TaskHistoryMetadata {
+        datestamp: files.datestamp.clone(),
+        task_key: task_key.to_string(),
+        project: if project.is_empty() {
+            files.project.clone()
+        } else {
+            project.to_string()
+        },
+        action: if action.is_empty() {
+            files.action.clone()
+        } else {
+            action.to_string()
+        },
+        status: if ok {
+            "success".to_string()
+        } else {
+            "fail".to_string()
+        },
+        started_at: files.started_at.clone(),
+        finished_at: Some(Local::now().to_rfc3339_opts(SecondsFormat::Secs, false)),
+        raw_file: files.raw_path.to_string_lossy().to_string(),
+    };
+
+    write_metadata(files.meta_path.as_path(), &metadata);
+}
+
+fn write_metadata(path: &Path, metadata: &TaskHistoryMetadata) {
+    let payload = match serde_json::to_vec_pretty(metadata) {
+        Ok(payload) => payload,
+        Err(err) => {
+            println!(
+                "Failed to serialize metadata for {}: {}",
+                path.display(),
+                err
+            );
+            return;
+        }
+    };
+
+    if let Err(err) = fs::write(path, payload) {
+        println!("Failed to write metadata file {}: {}", path.display(), err);
     }
 }

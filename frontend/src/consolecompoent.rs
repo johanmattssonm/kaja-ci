@@ -18,6 +18,9 @@ struct Console {
     project: String,
 
     #[attribute]
+    file: String,
+
+    #[attribute]
     action: String,
 
     #[attribute]
@@ -38,6 +41,7 @@ impl Component for ConsoleComponent {
         let id = self.get_id();
         let action: String = self.get_attribute("action").unwrap_or_default();
         let project: String = self.get_attribute("project").unwrap_or_default();
+        let file: String = self.get_attribute("file").unwrap_or_default();
 
         log!("Connected:", &id);
         self.render();
@@ -55,6 +59,11 @@ impl Component for ConsoleComponent {
             spawn_local(async move {
                 connect_terminal(project).await;
             });
+            return;
+        }
+
+        if action == "log" {
+            load_latest_raw_log(id, project, file);
             return;
         }
 
@@ -179,8 +188,14 @@ impl ConsoleComponent {
             "terminal-output"
         };
 
+        let initial_status = if action == "log" {
+            "Log"
+        } else {
+            "Disconnected"
+        };
+
         let content = html! {{
-            <h1 id="status">Disconnected</h1>
+            <h1 id="status">$(initial_status)</h1>
             <p>Project Folder: $(project)</p>
             <pre id="$(id)-output" class="$(output_class)" tabindex="0">
                 <rust>
@@ -213,6 +228,60 @@ impl ConsoleComponent {
 
 fn url_encode(value: &str) -> String {
     js_sys::encode_uri_component(value).into()
+}
+
+fn load_latest_raw_log(component_id: String, project: String, file: String) {
+    spawn_local(async move {
+        let endpoint = if !file.is_empty() {
+            format!("/log/raw?file={}", url_encode(file.as_str()))
+        } else if !project.is_empty() {
+            format!("/log/raw?project={}", url_encode(project.as_str()))
+        } else {
+            try_inner_text("#status", "No project or log file selected.");
+            return;
+        };
+
+        let response = match Request::get(endpoint.as_str()).send().await {
+            Ok(response) => response,
+            Err(_) => {
+                try_inner_text("#status", "Failed to load log output.");
+                return;
+            }
+        };
+
+        if !response.ok() {
+            try_inner_text("#status", "No log history found.");
+            return;
+        }
+
+        let output = match response.text().await {
+            Ok(output) => output,
+            Err(_) => {
+                try_inner_text("#status", "Failed to parse log output.");
+                return;
+            }
+        };
+
+        let output_id = format!("{}-output", component_id);
+
+        if let Some(element) = get_element_by_id(output_id.as_str()) {
+            element.set_class_name("terminal-output");
+
+            if let Some(component) = ConsoleComponent::get_component(component_id.as_str()) {
+                let rendered = {
+                    let mut context = component.borrow_mut();
+                    context.ansi_render_state = None;
+                    color::append_ansi_chunk(&mut context.ansi_render_state, output.as_str(), None)
+                };
+
+                element.set_inner_html(rendered.as_str());
+            } else {
+                element.set_text_content(Some(output.as_str()));
+            }
+        }
+
+        try_inner_text("#status", "Log Output");
+    });
 }
 
 fn abort_endpoint(task_key: Option<&str>, project: Option<&str>) -> Option<String> {
@@ -375,13 +444,48 @@ async fn start_task(project: &str, action: &str) -> Option<String> {
 
     if let Some(message) = payload.message {
         log!("/run failed", &message);
-        try_inner_text("#status", message.as_str());
+
+        if let Some(running_task_key) = payload.task {
+            render_running_task_status(message.as_str(), running_task_key.as_str(), project);
+        } else {
+            try_inner_text("#status", message.as_str());
+        }
     } else {
         log!("/run failed");
         try_inner_text("#status", "Failed to start task");
     }
 
     None
+}
+
+fn render_running_task_status(message: &str, running_task_key: &str, project: &str) {
+    let Some(status) = get_element("#status") else {
+        return;
+    };
+
+    let href = task_href(running_task_key, project);
+    let content = html! {{
+        There is already a <a href="$href">task</a> running.
+    }};
+
+    status.set_inner_html(content.as_str());
+}
+
+fn task_href(task_key: &str, project: &str) -> String {
+    let action = task_key
+        .split_once('-')
+        .map(|(action, _)| action)
+        .unwrap_or(task_key);
+
+    match action {
+        "git" | "fetch" => format!("/fetch?project={project}"),
+        "build" => format!("/build?project={project}"),
+        "test" => format!("/test?project={project}"),
+        "release" => format!("/release?project={project}"),
+        "clean" => format!("/clean?project={project}"),
+        "terminal" => format!("/terminal?project={project}"),
+        custom => format!("/custom?project={project}&custom_label={custom}"),
+    }
 }
 
 #[callback("connectTerminal")]

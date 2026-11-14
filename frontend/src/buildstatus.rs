@@ -2,7 +2,11 @@ use futures_util::{
     StreamExt,
     future::{AbortHandle, Abortable},
 };
-use gloo_net::websocket::{Message, futures::WebSocket};
+use gloo_net::{
+    http::Request,
+    websocket::{Message, futures::WebSocket},
+};
+use js_sys::Date;
 use kaja_web::prelude::*;
 use serde::Deserialize;
 use std::{
@@ -29,6 +33,19 @@ struct TaskRunningStatus {
     task_key: String,
     time: String,
     href: String,
+    message: Option<String>,
+}
+
+#[derive(Deserialize, Debug)]
+struct LatestLogResponse {
+    found: bool,
+    metadata: Option<LatestLogMetadata>,
+}
+
+#[derive(Deserialize, Debug)]
+struct LatestLogMetadata {
+    status: String,
+    finished_at: Option<String>,
 }
 
 #[component("build-status")]
@@ -61,6 +78,7 @@ impl Component for BuildStatusComponent {
         }
 
         ensure_build_status_page_handlers();
+        load_latest_build_status(id.clone(), project.clone());
         start_build_status_connection(id, project);
     }
 
@@ -96,6 +114,7 @@ impl Component for BuildStatusComponent {
             }
         }
 
+        load_latest_build_status(id.clone(), project.clone());
         start_build_status_connection(id, project);
     }
 }
@@ -103,7 +122,7 @@ impl Component for BuildStatusComponent {
 impl BuildStatusComponent {
     fn render(&self) {
         let id = self.get_id();
-        render_status(id.as_str(), "#", "");
+        render_status(id.as_str(), "", "");
     }
 }
 
@@ -153,6 +172,7 @@ fn resume_build_status_connections(_event: web_sys::Event) {
         };
 
         let project: String = component.get_attribute("project").unwrap_or_default();
+        load_latest_build_status(id.clone(), project.clone());
         start_build_status_connection(id, project);
     }
 }
@@ -251,20 +271,121 @@ fn connect_task_ws(id: String, abort_registration: futures_util::future::AbortRe
                     continue;
                 };
 
-                let outcome = if status.running {
-                    "RUNNING"
-                } else if status.ok {
-                    "OK"
+                let local_time = local_time_label(status.time.as_str());
+
+                let is_log_href = status.href.starts_with("/log");
+
+                let mut label = if status.ok && !status.running && is_log_href {
+                    if local_time.is_empty() {
+                        "run-all".to_string()
+                    } else {
+                        format!("run-all - {}", local_time)
+                    }
                 } else {
-                    "FAILED"
+                    let action = task_action_label(status.task_key.as_str());
+                    let outcome = if status.running {
+                        "running"
+                    } else if status.ok {
+                        "done"
+                    } else {
+                        "failed"
+                    };
+
+                    format!("{} {} {}", action, outcome, local_time)
                 };
-                let label = format!("{} {} ({})", status.task_key, outcome, status.time);
+
+                if !is_log_href {
+                    if let Some(message) = status.message.filter(|value| !value.trim().is_empty()) {
+                        label.push_str(" — ");
+                        label.push_str(message.as_str());
+                    }
+                }
+
                 render_status(id.as_str(), status.href.as_str(), label.as_str());
             }
         };
 
         let _ = Abortable::new(read_messages, abort_registration).await;
     });
+}
+
+fn load_latest_build_status(id: String, project: String) {
+    if project.is_empty() {
+        return;
+    }
+
+    spawn_local(async move {
+        let endpoint = format!(
+            "/log/latest?project={}",
+            js_sys::encode_uri_component(project.as_str())
+        );
+
+        let Ok(response) = Request::get(endpoint.as_str()).send().await else {
+            return;
+        };
+
+        let Ok(payload) = response.text().await else {
+            return;
+        };
+
+        let Ok(latest) = serde_json::from_str::<LatestLogResponse>(payload.as_str()) else {
+            return;
+        };
+
+        if !latest.found {
+            render_status(id.as_str(), "", "");
+            return;
+        }
+
+        let Some(metadata) = latest.metadata else {
+            return;
+        };
+
+        let time_value = metadata.finished_at.unwrap_or_default();
+        let local_time = if time_value.is_empty() {
+            "".to_string()
+        } else {
+            local_time_label(time_value.as_str())
+        };
+
+        let label = if metadata.status == "success" {
+            if local_time.is_empty() {
+                "✓ done".to_string()
+            } else {
+                format!("✓ done {}", local_time)
+            }
+        } else {
+            if local_time.is_empty() {
+                "✗ failed".to_string()
+            } else {
+                format!("✗ failed {}", local_time)
+            }
+        };
+
+        let href = format!(
+            "/log?project={}",
+            js_sys::encode_uri_component(project.as_str())
+        );
+        render_status(id.as_str(), href.as_str(), label.as_str());
+    });
+}
+
+fn task_action_label(task_key: &str) -> &str {
+    task_key
+        .split_once('-')
+        .map(|(action, _)| action)
+        .unwrap_or(task_key)
+}
+
+fn local_time_label(input: &str) -> String {
+    let date = Date::new(&input.into());
+
+    if date.get_time().is_nan() {
+        return input.to_string();
+    }
+
+    let value = date.to_locale_string("en-GB", &wasm_bindgen::JsValue::UNDEFINED);
+    value.as_string().unwrap_or_else(|| input.to_string())
 }
 
 fn render_status(id: &str, href: &str, label: &str) {
@@ -275,6 +396,11 @@ fn render_status(id: &str, href: &str, label: &str) {
             return;
         }
     };
+
+    if href.trim().is_empty() || label.trim().is_empty() {
+        element.set_inner_html("");
+        return;
+    }
 
     let content = html! {{
         <a href="$href">$label</a>

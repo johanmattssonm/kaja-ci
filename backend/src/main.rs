@@ -8,6 +8,7 @@ mod clean;
 mod custom;
 mod fetch;
 mod index;
+mod logs;
 mod release;
 mod run;
 mod runner;
@@ -42,6 +43,10 @@ async fn main() -> std::io::Result<()> {
             .service(taskrunner::run)
             .service(status::status)
             .service(custom::custom)
+            .service(logs::log_page)
+            .service(logs::latest_log)
+            .service(logs::latest_log_raw)
+            .service(logs::history_page)
             .route("/runner", web::get().to(runner::websocket))
             .route("/task", web::get().to(taskrunner::websocket))
     })
