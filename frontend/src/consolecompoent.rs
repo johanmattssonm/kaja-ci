@@ -25,6 +25,11 @@ struct Console {
 
     #[attribute]
     task_key: String,
+
+    #[attribute]
+    has_connected: bool,
+
+    ansi_render_state: Option<color::AnsiRenderState>,
 }
 
 impl Component for ConsoleComponent {
@@ -75,6 +80,12 @@ impl Component for ConsoleComponent {
     }
 
     fn attribute_changed(&self, name: &str, _old_value: &str, new_value: &str) {
+        if name == "task_key" {
+            self.render();
+            focus_console_output(&self.get_id());
+            return;
+        }
+
         if name == "connect" {
             self.handle_connect(new_value);
         }
@@ -108,13 +119,30 @@ impl ConsoleComponent {
         if new_value.is_empty() {
             if component.set_attribute("task_key", "").is_err() {
                 log!("Failed to set task_key attribute on console component.");
-                return;
             }
+
+            return;
         }
 
         if component.set_attribute("task_key", new_value).is_err() {
             log!("Failed to set task_key attribute on console component.");
             return;
+        }
+
+        let has_connected = component
+            .get_attribute("has_connected")
+            .is_some_and(|value| value == "true");
+
+        if !has_connected {
+            let output_id = format!("{}-output", component_id);
+            self.with_mut(|context| {
+                context.ansi_render_state = None;
+            });
+
+            if let Some(output) = get_element_by_id(output_id.as_str()) {
+                output.set_class_name("terminal-output");
+                output.set_inner_html("");
+            }
         }
 
         let task_key = new_value.to_string();
@@ -134,18 +162,60 @@ impl ConsoleComponent {
             }
         };
 
-        color::clear_render_state(&format!("{}-output", id));
-        element.set_inner_html("");
+        let output_id = format!("{}-output", id);
+        let existing_output = get_element_by_id(output_id.as_str())
+            .map(|output| (output.inner_html(), output.class_name()));
 
         let project: String = self.get_attribute("project").unwrap_or_default();
+        let action: String = self.get_attribute("action").unwrap_or_default();
+        let task_key: String = self.get_attribute("task_key").unwrap_or_default();
+        let has_connected: bool = self.get_attribute("has_connected").unwrap_or(false);
+
+        let show_connect_button = action == "terminal" && task_key.is_empty() && !has_connected;
+        let preserve_previous_output = action == "terminal" && has_connected;
+
+        if !preserve_previous_output {
+            self.with_mut(|context| {
+                context.ansi_render_state = None;
+            });
+        }
+        element.set_inner_html("");
+
+        let output_class = if show_connect_button {
+            "terminal-output terminal-output--waiting"
+        } else {
+            "terminal-output"
+        };
 
         let content = html! {{
             <h1 id="status">Loading</h1>
             <p>Project Folder: $(project)</p>
-            <pre id="$(id)-output" class="terminal-output" tabindex="0"></pre>
+            <pre id="$(id)-output" class="$(output_class)" tabindex="0">
+                <rust>
+                    if show_connect_button {
+                        <markup>
+                            <button class="terminal-connect-button" onclick="connectTerminal('$project')">Connect</button>
+                        </markup>
+                    }
+                </rust>
+            </pre>
         }};
 
         element.set_inner_html(content.as_str());
+
+        if preserve_previous_output {
+            if let Some((html, class_name)) = existing_output {
+                if let Some(output) = get_element_by_id(output_id.as_str()) {
+                    output.set_inner_html(html.as_str());
+
+                    if class_name.is_empty() {
+                        output.set_class_name("terminal-output");
+                    } else {
+                        output.set_class_name(class_name.as_str());
+                    }
+                }
+            }
+        }
     }
 }
 
@@ -309,13 +379,24 @@ async fn start_task(project: &str, action: &str) -> Option<String> {
 
 #[callback("connectTerminal")]
 async fn connect_terminal(project: String) {
-    let Some(task_key) = start_task(project.as_str(), "terminal").await else {
-        log!("Failed to start terminal.");
+    let Some(console) = get_element("console-component") else {
+        log!("No console component found.");
         return;
     };
 
-    let Some(console) = get_element("console-component") else {
-        log!("No console component found.");
+    let existing_task_key = console
+        .get_attribute("task_key")
+        .filter(|value| !value.is_empty());
+
+    if let Some(task_key) = existing_task_key {
+        if !abort_task(Some(task_key.as_str()), None).await {
+            try_inner_text("#save-status", "Failed to abort existing terminal session.");
+            return;
+        }
+    }
+
+    let Some(task_key) = start_task(project.as_str(), "terminal").await else {
+        log!("Failed to start terminal.");
         return;
     };
 
@@ -332,6 +413,10 @@ async fn connect_terminal(project: String) {
 
     if console.set_attribute("connect", task_key.as_str()).is_err() {
         log!("Failed to set connect attribute on terminal console.");
+    }
+
+    if console.set_attribute("has_connected", "true").is_err() {
+        log!("Failed to set has_connected attribute on terminal console.");
     }
 
     focus_console_output(&console_id);
@@ -411,7 +496,7 @@ async fn connect_console_view(id: String, task_key: String) {
     while let Some(message) = ws_read.next().await {
         match message {
             Ok(Message::Text(text)) => {
-                process_build_output(&format!("{}-output", id), text);
+                process_build_output(id.as_str(), text);
             }
             Ok(Message::Bytes(_)) => {
                 log!("Expecting string got binary data.");
@@ -541,8 +626,10 @@ fn setup_stdin_handler(id: &str, input_tx: mpsc::UnboundedSender<String>) {
     click_focus.forget();
 }
 
-fn process_build_output(id: &str, chunk: String) {
-    let element = match get_element_by_id(id) {
+fn process_build_output(component_id: &str, chunk: String) {
+    let output_id = format!("{}-output", component_id);
+
+    let element = match get_element_by_id(output_id.as_str()) {
         Some(element) => element,
         None => {
             log!("No output box for build.");
@@ -580,7 +667,16 @@ fn process_build_output(id: &str, chunk: String) {
 
         element.set_class_name("terminal-output");
 
-        let rendered = color::append_ansi_chunk(id, &stdout, resp.cursor_col);
+        let Some(component) = ConsoleComponent::get_component(component_id) else {
+            log!("No console component found for output.", component_id);
+            return;
+        };
+
+        let rendered = {
+            let mut context = component.borrow_mut();
+            color::append_ansi_chunk(&mut context.ansi_render_state, &stdout, resp.cursor_col)
+        };
+
         element.set_inner_html(&rendered);
         element.set_scroll_top(element.scroll_height());
     }

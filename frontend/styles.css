@@ -168,6 +168,19 @@ a:focus-visible {
     margin: 12px auto;
 }
 
+.terminal-output--waiting {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+}
+
+
+.terminal-connect-button {
+    margin-top: 0;
+    min-width: 160px;
+    padding: 10px 18px;
+}
+
 .terminal-span { white-space: pre; }
 .terminal-bold { font-weight: 700; }
 

@@ -1,5 +1,3 @@
-use std::{cell::RefCell, collections::HashMap};
-
 #[derive(Clone, Debug, PartialEq, Eq)]
 struct CellStyle {
     bold: bool,
@@ -15,7 +13,7 @@ struct StyledCell {
 }
 
 #[derive(Default)]
-struct AnsiRenderState {
+pub(crate) struct AnsiRenderState {
     pending_escape: String,
     bold: bool,
     fg_class: Option<&'static str>,
@@ -27,34 +25,25 @@ struct AnsiRenderState {
     insert_mode: bool,
 }
 
-thread_local! {
-    static RENDER_STATES: RefCell<HashMap<String, AnsiRenderState>> = RefCell::new(HashMap::new());
-}
+pub fn append_ansi_chunk(
+    render_state: &mut Option<AnsiRenderState>,
+    chunk: &str,
+    cursor_col: Option<usize>,
+) -> String {
+    let state = render_state.get_or_insert_with(AnsiRenderState::default);
+    let mut input = String::new();
+    input.push_str(&state.pending_escape);
+    input.push_str(chunk);
+    state.pending_escape.clear();
 
-pub fn clear_render_state(id: &str) {
-    RENDER_STATES.with(|states| {
-        states.borrow_mut().remove(id);
-    });
-}
+    ansi_to_html_streaming(&input, state);
 
-pub fn append_ansi_chunk(id: &str, chunk: &str, cursor_col: Option<usize>) -> String {
-    RENDER_STATES.with(|states| {
-        let mut states = states.borrow_mut();
-        let state = states.entry(id.to_string()).or_default();
-        let mut input = String::new();
-        input.push_str(&state.pending_escape);
-        input.push_str(chunk);
-        state.pending_escape.clear();
-
-        ansi_to_html_streaming(&input, state);
-
-        if let Some(col) = cursor_col {
-            state.cursor_col = col;
-            render_buffer_with_caret(state)
-        } else {
-            render_buffer(state)
-        }
-    })
+    if let Some(col) = cursor_col {
+        state.cursor_col = col;
+        render_buffer_with_caret(state)
+    } else {
+        render_buffer(state)
+    }
 }
 
 fn render_buffer(state: &AnsiRenderState) -> String {

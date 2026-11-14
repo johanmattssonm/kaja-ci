@@ -794,6 +794,34 @@ mod tests {
     }
 
     #[test]
+    fn terminal_payload_uses_screen_action_in_alternate_screen() {
+        let mut screen = TerminalScreen::new(2, 8);
+        screen.feed("\u{1b}[?1049hhi");
+
+        let payload = build_terminal_action_payload(&screen, "ignored").unwrap();
+        let response: ActionResponse = serde_json::from_str(payload.as_str()).unwrap();
+
+        assert_eq!(response.action, "SCREEN");
+        assert_eq!(response.stdout.unwrap(), screen.to_text());
+        assert_eq!(response.cursor_row, Some(screen.cursor_row));
+        assert_eq!(response.cursor_col, Some(screen.cursor_col));
+    }
+
+    #[test]
+    fn terminal_payload_uses_stdout_action_outside_alternate_screen() {
+        let mut screen = TerminalScreen::new(2, 8);
+        screen.feed("hello");
+
+        let payload = build_terminal_action_payload(&screen, "hello").unwrap();
+        let response: ActionResponse = serde_json::from_str(payload.as_str()).unwrap();
+
+        assert_eq!(response.action, "STDOUT");
+        assert_eq!(response.stdout.unwrap(), "hello");
+        assert_eq!(response.cursor_row, None);
+        assert_eq!(response.cursor_col, Some(screen.cursor_col));
+    }
+
+    #[test]
     fn utf8_decoder_handles_split_multibyte_sequences() {
         let mut pending = vec![0xC3];
         assert_eq!(decode_utf8_chunk(&mut pending), "");
@@ -1423,6 +1451,7 @@ async fn start_detached_action(
         let mut reader = reader;
         let mut buf = [0_u8; 4096];
         let mut utf8_pending = Vec::new();
+        let mut state = TerminalScreen::new(rows as usize, cols as usize);
 
         loop {
             match reader.read(&mut buf) {
@@ -1435,7 +1464,15 @@ async fn start_detached_action(
                             utf8_pending.clear();
                         }
 
-                        broadcast_task_stdout(task_key_stdout.as_str(), &stdout_tx_reader, chunk);
+                        if !chunk.is_empty() {
+                            state.feed(chunk.as_str());
+                            broadcast_terminal_update(
+                                task_key_stdout.as_str(),
+                                &stdout_tx_reader,
+                                &state,
+                                chunk.as_str(),
+                            );
+                        }
                     }
 
                     break;
@@ -1448,7 +1485,13 @@ async fn start_detached_action(
                         continue;
                     }
 
-                    broadcast_task_stdout(task_key_stdout.as_str(), &stdout_tx_reader, chunk);
+                    state.feed(chunk.as_str());
+                    broadcast_terminal_update(
+                        task_key_stdout.as_str(),
+                        &stdout_tx_reader,
+                        &state,
+                        chunk.as_str(),
+                    );
                 }
                 Err(err) if err.raw_os_error() == Some(5) => {
                     break;
@@ -1552,11 +1595,7 @@ fn broadcast_task_status(stdout_tx: &broadcast::Sender<String>, status: &str) {
     }
 }
 
-fn queue_terminal_update(
-    tx: &mpsc::Sender<OutputPacket>,
-    state: &TerminalScreen,
-    chunk: String,
-) -> bool {
+fn build_terminal_action_payload(state: &TerminalScreen, chunk: &str) -> Option<String> {
     let action = if state.in_alternate_screen() {
         ActionResponse {
             stdout: Some(state.to_text()),
@@ -1567,7 +1606,7 @@ fn queue_terminal_update(
         }
     } else {
         ActionResponse {
-            stdout: Some(chunk.clone()),
+            stdout: Some(chunk.to_string()),
             action: "STDOUT".to_string(),
             status: None,
             cursor_row: None,
@@ -1575,7 +1614,15 @@ fn queue_terminal_update(
         }
     };
 
-    let Ok(websocket_payload) = serde_json::to_string(&action) else {
+    serde_json::to_string(&action).ok()
+}
+
+fn queue_terminal_update(
+    tx: &mpsc::Sender<OutputPacket>,
+    state: &TerminalScreen,
+    chunk: String,
+) -> bool {
+    let Some(websocket_payload) = build_terminal_action_payload(state, chunk.as_str()) else {
         println!("Failed to build response package.");
         return false;
     };
@@ -1585,6 +1632,22 @@ fn queue_terminal_update(
         history_chunk: chunk,
     })
     .is_ok()
+}
+
+fn broadcast_terminal_update(
+    task_key: &str,
+    stdout_tx: &broadcast::Sender<String>,
+    state: &TerminalScreen,
+    chunk: &str,
+) {
+    append_task_history_blocking(task_key, chunk);
+
+    let Some(payload) = build_terminal_action_payload(state, chunk) else {
+        println!("Failed to build response package.");
+        return;
+    };
+
+    let _ = stdout_tx.send(payload);
 }
 
 async fn start_build(
