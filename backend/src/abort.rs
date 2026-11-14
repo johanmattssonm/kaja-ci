@@ -13,8 +13,8 @@ use std::thread;
 use std::time::Duration;
 use tokio::sync::{Mutex, mpsc};
 
+use crate::app::APP_DATA;
 use crate::runner::ProjectGetParams;
-use crate::{APP_DATA, Task};
 
 #[actix_web::get("/abort")]
 pub async fn abort(params: web::Query<ProjectGetParams>) -> impl Responder {

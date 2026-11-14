@@ -3,19 +3,19 @@ use actix_ws::{Message, Session, handle};
 use portable_pty::{Child, CommandBuilder, PtySize, native_pty_system};
 use serde::Deserialize;
 use std::collections::VecDeque;
-use std::fmt::Write as _;
+use std::fmt::{Display, Formatter, Write as _};
 use std::io::{Read, Write};
 
 use std::path::PathBuf;
 use std::sync::{Arc, RwLock as StdRwLock};
 use std::thread;
 use std::time::Duration;
-use tokio::sync::{Mutex, mpsc};
+use tokio::sync::{Mutex, broadcast, mpsc};
 
 #[path = "../../frontend/src/rest.rs"]
 mod rest;
 
-use crate::{APP_DATA, Task};
+use crate::app::APP_DATA;
 use rest::{Action, ActionResponse, BuildCommands};
 
 pub const BUILD_DIR: &str = "/home/johan/Downloads/resting-chair";
@@ -25,10 +25,36 @@ pub struct ProjectGetParams {
     pub project: String,
 }
 
+#[derive(Debug)]
+pub enum RunTaskError {
+    AlreadyRunning,
+    InvalidProjectFolder,
+    NoCommandConfigured(String),
+    Internal(String),
+}
+
+impl Display for RunTaskError {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::AlreadyRunning => write!(f, "There is already a task running."),
+            Self::InvalidProjectFolder => write!(f, "Can't find writable project folder."),
+            Self::NoCommandConfigured(action_name) => {
+                write!(f, "No command configured for action '{}'.", action_name)
+            }
+            Self::Internal(message) => write!(f, "{message}"),
+        }
+    }
+}
+
 #[derive(Default)]
 struct BuildInputState {
-    tx: Option<mpsc::Sender<String>>,
+    task_key: Option<String>,
     pending: VecDeque<String>,
+}
+
+struct OutputPacket {
+    websocket_payload: String,
+    history_chunk: String,
 }
 
 #[derive(Clone, Copy)]
@@ -811,16 +837,129 @@ fn folder_exists(path: &str) -> bool {
     }
 }
 
+fn build_task_key(action: &str, folder: &str) -> String {
+    format!("{}-{}", action, folder)
+}
+
+fn task_key_for_action(action: &Action) -> Option<String> {
+    Some(build_task_key(&action.action, action.folder.as_deref()?))
+}
+
+async fn task_stdin_sender(task_key: &str) -> Option<mpsc::Sender<String>> {
+    APP_DATA
+        .read()
+        .await
+        .tasks
+        .get(task_key)
+        .and_then(|task| task.stdin_tx.clone())
+}
+
+async fn append_task_history(task_key: &str, output: &str) {
+    if output.is_empty() {
+        return;
+    }
+
+    let mut app = APP_DATA.write().await;
+
+    if let Some(task) = app.tasks.get_mut(task_key) {
+        task.history.extend_from_slice(output.as_bytes());
+    }
+}
+
+async fn flush_pending_stdin(task_key: &str, stdin_state: Arc<Mutex<BuildInputState>>) {
+    loop {
+        let pending = {
+            let mut state = stdin_state.lock().await;
+
+            if state.task_key.as_deref() != Some(task_key) {
+                return;
+            }
+
+            state.pending.pop_front()
+        };
+
+        let Some(pending) = pending else {
+            break;
+        };
+
+        let Some(tx) = task_stdin_sender(task_key).await else {
+            let mut state = stdin_state.lock().await;
+            state.pending.push_front(pending);
+            break;
+        };
+
+        if tx.try_send(pending.clone()).is_err() {
+            let mut state = stdin_state.lock().await;
+            state.pending.push_front(pending);
+            break;
+        }
+    }
+}
+
+async fn attach_to_running_task(
+    session: &mut Session,
+    stdin_state: Arc<Mutex<BuildInputState>>,
+    task_key: &str,
+) -> bool {
+    let (history, mut stdout_rx) = {
+        let app = APP_DATA.read().await;
+
+        let Some(task) = app.tasks.get(task_key) else {
+            return false;
+        };
+
+        if task.running_command.is_none() {
+            return false;
+        }
+
+        let Some(stdout_tx) = task.stdout_tx.clone() else {
+            return false;
+        };
+
+        (task.history.clone(), stdout_tx.subscribe())
+    };
+
+    if !history.is_empty() {
+        let history_action = ActionResponse {
+            stdout: Some(String::from_utf8_lossy(&history).into_owned()),
+            action: "STDOUT".to_string(),
+            status: None,
+            cursor_row: None,
+            cursor_col: None,
+        };
+
+        if let Ok(json) = serde_json::to_string(&history_action) {
+            let _ = session.text(json).await;
+        }
+    }
+
+    send_status(session, "RUNNING").await;
+    flush_pending_stdin(task_key, stdin_state).await;
+
+    let mut attached_session = session.clone();
+
+    actix_web::rt::spawn(async move {
+        loop {
+            match stdout_rx.recv().await {
+                Ok(chunk) => {
+                    if attached_session.text(chunk).await.is_err() {
+                        break;
+                    }
+                }
+                Err(broadcast::error::RecvError::Lagged(_)) => continue,
+                Err(broadcast::error::RecvError::Closed) => break,
+            }
+        }
+    });
+
+    true
+}
+
 async fn process_action(
     text: String,
     session: &mut Session,
     stdin_state: Arc<Mutex<BuildInputState>>,
 ) {
-    if stdin_state.lock().await.tx.is_some() {
-        send_stdout(session, "Console is already attached.").await;
-        return;
-    }
-
     let action = parse_action(text);
 
     if action.is_none() {
@@ -846,11 +985,26 @@ async fn process_action(
         return;
     }
 
+    let Some(task_key) = task_key_for_action(&action) else {
+        send_stdout(session, "Unable to build task key.").await;
+        send_status(session, "FAILED").await;
+        return;
+    };
+
+    {
+        let mut state = stdin_state.lock().await;
+        state.task_key = Some(task_key.clone());
+    }
+
+    if attach_to_running_task(session, stdin_state.clone(), task_key.as_str()).await {
+        return;
+    }
+
     let mut build_session = session.clone();
     let build_stdin_state = stdin_state.clone();
 
     actix_web::rt::spawn(async move {
-        start_build(&mut build_session, build_stdin_state, action).await;
+        start_build(&mut build_session, build_stdin_state, action, task_key).await;
     });
 }
 
@@ -868,6 +1022,11 @@ async fn send_stdout(session: &mut Session, line: &str) {
     if let Ok(json) = serde_json::to_string(&action) {
         let _ = session.text(json).await;
     }
+}
+
+async fn send_stdout_for_task(session: &mut Session, task_key: &str, line: &str) {
+    append_task_history(task_key, line).await;
+    send_stdout(session, line).await;
 }
 
 async fn send_status(session: &mut Session, line: &str) {
@@ -933,15 +1092,30 @@ async fn process_ws_message(
 }
 
 async fn process_std_in(action: Action, stdin_state: Arc<Mutex<BuildInputState>>) {
-    let input_line = action.stdin.unwrap();
-    let mut state = stdin_state.lock().await;
+    let Some(input_line) = action.stdin else {
+        return;
+    };
 
-    if let Some(tx) = state.tx.clone() {
-        if tx.try_send(input_line.clone()).is_err() {
-            println!("STDIN send failed, buffering input.");
+    let task_key = {
+        let mut state = stdin_state.lock().await;
+
+        let Some(task_key) = state.task_key.clone() else {
             state.pending.push_back(input_line);
-        }
-    } else {
+            return;
+        };
+
+        task_key
+    };
+
+    let Some(tx) = task_stdin_sender(task_key.as_str()).await else {
+        let mut state = stdin_state.lock().await;
+        state.pending.push_back(input_line);
+        return;
+    };
+
+    if tx.try_send(input_line.clone()).is_err() {
+        println!("STDIN send failed, buffering input.");
+        let mut state = stdin_state.lock().await;
         state.pending.push_back(input_line);
     }
 }
@@ -974,7 +1148,8 @@ fn command_to_executable(action: &Action) -> Option<CommandBuilder> {
         "test" => parse_command(config_commands.test, folder).ok(),
         "release" => parse_command(config_commands.release, folder).ok(),
         "clean" => parse_command(config_commands.clean, folder).ok(),
-        "terminal" => parse_command(config_commands.terminal, folder).ok(),
+        "terminal" => parse_command(config_commands.terminal.clone(), folder).ok(),
+        "run" => parse_command(config_commands.terminal, folder).ok(),
         _ => {
             println!("Unknown action {}", action.action);
             None
@@ -999,38 +1174,26 @@ fn parse_command(command: Option<String>, folder: &str) -> Result<CommandBuilder
     Ok(cmd)
 }
 
-async fn regiter_process(action: &Action, process: Arc<StdRwLock<Box<dyn Child + Send + Sync>>>) {
-    if action.folder.is_none() {
-        println!("No folder for process");
-        return;
-    }
-
-    let folder = action.folder.clone().unwrap();
-
-    APP_DATA.write().await.tasks.insert(
-        folder,
-        Task {
-            running_command: Some(process),
-            history: Vec::new(),
-        },
+async fn register_process(
+    action: &Action,
+    process: Arc<StdRwLock<Box<dyn Child + Send + Sync>>>,
+    stdin_tx: mpsc::Sender<String>,
+    stdout_tx: broadcast::Sender<String>,
+) {
+    let _ = APP_DATA.write().await.start_task(
+        Some(action.action.clone()),
+        action.folder.clone(),
+        process,
+        stdin_tx,
+        stdout_tx,
     );
 }
 
 async fn unregister_process(action: &Action) {
-    if action.folder.is_none() {
-        println!("No folder for process");
-        return;
-    }
-
-    let folder = action.folder.clone().unwrap();
-
-    APP_DATA.write().await.tasks.insert(
-        folder,
-        Task {
-            running_command: None,
-            history: Vec::new(),
-        },
-    );
+    let _ = APP_DATA
+        .write()
+        .await
+        .drop_task(Some(action.action.clone()), action.folder.clone());
 }
 
 fn wait_for_exit(
@@ -1052,7 +1215,245 @@ fn wait_for_exit(
     }
 }
 
-fn queue_terminal_update(tx: &mpsc::Sender<String>, state: &TerminalScreen, chunk: String) -> bool {
+pub async fn start_run_task(project_folder: String) -> Result<String, RunTaskError> {
+    start_detached_action("run", project_folder).await
+}
+
+async fn start_detached_action(
+    action_name: &str,
+    project_folder: String,
+) -> Result<String, RunTaskError> {
+    if APP_DATA.read().await.has_running_task() {
+        return Err(RunTaskError::AlreadyRunning);
+    }
+
+    if !folder_exists(project_folder.as_str()) {
+        return Err(RunTaskError::InvalidProjectFolder);
+    }
+
+    let action_name = action_name.to_string();
+
+    let action = Action {
+        action: action_name.clone(),
+        command: None,
+        folder: Some(project_folder.clone()),
+        stdin: None,
+    };
+
+    let Some(cmd) = command_to_executable(&action) else {
+        return Err(RunTaskError::NoCommandConfigured(action_name.clone()));
+    };
+
+    let pty_system = native_pty_system();
+    let rows = 30u16;
+    let cols = 120u16;
+
+    let pty_pair = pty_system
+        .openpty(PtySize {
+            rows,
+            cols,
+            pixel_width: 0,
+            pixel_height: 0,
+        })
+        .map_err(|err| RunTaskError::Internal(format!("failed to allocate PTY: {err}")))?;
+
+    let mut child = pty_pair
+        .slave
+        .spawn_command(cmd)
+        .map_err(|err| RunTaskError::Internal(format!("failed to start run command: {err}")))?;
+
+    let reader = match pty_pair.master.try_clone_reader() {
+        Ok(reader) => reader,
+        Err(err) => {
+            let _ = child.kill();
+            return Err(RunTaskError::Internal(format!(
+                "failed to open PTY reader: {err}"
+            )));
+        }
+    };
+
+    let mut writer = match pty_pair.master.take_writer() {
+        Ok(writer) => writer,
+        Err(err) => {
+            let _ = child.kill();
+            return Err(RunTaskError::Internal(format!(
+                "failed to open PTY writer: {err}"
+            )));
+        }
+    };
+
+    let (input_tx, mut input_rx) = mpsc::channel::<String>(100);
+    let (stdout_tx, _) = broadcast::channel::<String>(200);
+    let child = Arc::new(StdRwLock::new(child));
+
+    let task_key = {
+        let mut app = APP_DATA.write().await;
+
+        match app.start_task(
+            Some(action_name.clone()),
+            Some(project_folder.clone()),
+            child.clone(),
+            input_tx,
+            stdout_tx.clone(),
+        ) {
+            Ok(task_key) => task_key,
+            Err(err) => {
+                if let Ok(mut process) = child.write() {
+                    let _ = process.kill();
+                }
+
+                return Err(RunTaskError::Internal(err));
+            }
+        }
+    };
+
+    broadcast_task_status(&stdout_tx, "RUNNING");
+
+    drop(pty_pair.slave);
+
+    let task_key_stdout = task_key.clone();
+    let stdout_tx_reader = stdout_tx.clone();
+
+    std::thread::spawn(move || {
+        let mut reader = reader;
+        let mut buf = [0_u8; 4096];
+        let mut utf8_pending = Vec::new();
+
+        loop {
+            match reader.read(&mut buf) {
+                Ok(0) => {
+                    if !utf8_pending.is_empty() {
+                        let mut chunk = decode_utf8_chunk(&mut utf8_pending);
+
+                        if !utf8_pending.is_empty() {
+                            chunk.push_str(&String::from_utf8_lossy(&utf8_pending));
+                            utf8_pending.clear();
+                        }
+
+                        broadcast_task_stdout(task_key_stdout.as_str(), &stdout_tx_reader, chunk);
+                    }
+
+                    break;
+                }
+                Ok(n) => {
+                    utf8_pending.extend_from_slice(&buf[..n]);
+                    let chunk = decode_utf8_chunk(&mut utf8_pending);
+
+                    if chunk.is_empty() {
+                        continue;
+                    }
+
+                    broadcast_task_stdout(task_key_stdout.as_str(), &stdout_tx_reader, chunk);
+                }
+                Err(err) if err.raw_os_error() == Some(5) => {
+                    break;
+                }
+                Err(err) => {
+                    let line = format!("PTY read error: {err}");
+                    broadcast_task_stdout(task_key_stdout.as_str(), &stdout_tx_reader, line);
+                    break;
+                }
+            }
+        }
+    });
+
+    std::thread::spawn(move || {
+        while let Some(data) = input_rx.blocking_recv() {
+            if writer.write_all(data.as_bytes()).is_err() {
+                break;
+            }
+
+            if writer.flush().is_err() {
+                break;
+            }
+        }
+    });
+
+    let task_key_exit = task_key.clone();
+    let stdout_tx_exit = stdout_tx.clone();
+    let action_name_exit = action_name.clone();
+    let project_folder_exit = project_folder.clone();
+    let child_exit = child.clone();
+
+    std::thread::spawn(move || {
+        let status = wait_for_exit(child_exit);
+
+        if let Ok(status) = status {
+            let exit_code = status.exit_code();
+            let out = format!("Task finished, exit code: {:?}", exit_code);
+            broadcast_task_stdout(task_key_exit.as_str(), &stdout_tx_exit, out);
+
+            if exit_code == 0 {
+                broadcast_task_status(&stdout_tx_exit, "SUCCESS");
+            } else {
+                broadcast_task_status(&stdout_tx_exit, "FAILED");
+            }
+        } else {
+            let out = "Task failed while waiting for exit.".to_string();
+            broadcast_task_stdout(task_key_exit.as_str(), &stdout_tx_exit, out);
+            broadcast_task_status(&stdout_tx_exit, "FAILED");
+        }
+
+        let mut app = APP_DATA.blocking_write();
+        let _ = app.drop_task(Some(action_name_exit), Some(project_folder_exit));
+    });
+
+    Ok(task_key)
+}
+
+fn stdout_response_json(line: String) -> Option<String> {
+    serde_json::to_string(&ActionResponse {
+        stdout: Some(line),
+        action: "STDOUT".to_string(),
+        status: None,
+        cursor_row: None,
+        cursor_col: None,
+    })
+    .ok()
+}
+
+fn status_response_json(line: &str) -> Option<String> {
+    serde_json::to_string(&ActionResponse {
+        stdout: None,
+        action: "STATUS".to_string(),
+        status: Some(format!("status: {line}")),
+        cursor_row: None,
+        cursor_col: None,
+    })
+    .ok()
+}
+
+fn append_task_history_blocking(task_key: &str, output: &str) {
+    if output.is_empty() {
+        return;
+    }
+
+    let mut app = APP_DATA.blocking_write();
+
+    if let Some(task) = app.tasks.get_mut(task_key) {
+        task.history.extend_from_slice(output.as_bytes());
+    }
+}
+
+fn broadcast_task_stdout(task_key: &str, stdout_tx: &broadcast::Sender<String>, line: String) {
+    append_task_history_blocking(task_key, line.as_str());
+
+    if let Some(payload) = stdout_response_json(line) {
+        let _ = stdout_tx.send(payload);
+    }
+}
+
+fn broadcast_task_status(stdout_tx: &broadcast::Sender<String>, status: &str) {
+    if let Some(payload) = status_response_json(status) {
+        let _ = stdout_tx.send(payload);
+    }
+}
+
+fn queue_terminal_update(
+    tx: &mpsc::Sender<OutputPacket>,
+    state: &TerminalScreen,
+    chunk: String,
+) -> bool {
     let action = if state.in_alternate_screen() {
         ActionResponse {
             stdout: Some(state.to_text()),
@@ -1063,7 +1464,7 @@ fn queue_terminal_update(tx: &mpsc::Sender<String>, state: &TerminalScreen, chun
         }
     } else {
         ActionResponse {
-            stdout: Some(chunk),
+            stdout: Some(chunk.clone()),
             action: "STDOUT".to_string(),
             status: None,
             cursor_row: None,
@@ -1071,20 +1472,23 @@ fn queue_terminal_update(tx: &mpsc::Sender<String>, state: &TerminalScreen, chun
         }
     };
 
-    let json = serde_json::to_string(&action);
-
-    if json.is_err() {
+    let Ok(websocket_payload) = serde_json::to_string(&action) else {
         println!("Failed to build response package.");
         return false;
-    }
+    };
 
-    tx.blocking_send(json.unwrap()).is_ok()
+    tx.blocking_send(OutputPacket {
+        websocket_payload,
+        history_chunk: chunk,
+    })
+    .is_ok()
 }
 
 async fn start_build(
     session: &mut Session,
     stdin_state: Arc<Mutex<BuildInputState>>,
     action: Action,
+    task_key: String,
 ) {
     send_status(session, "RUNNING").await;
     let pty_system = native_pty_system();
@@ -1115,8 +1519,6 @@ async fn start_build(
 
     let cmd = cmd.unwrap();
 
-    // println!("Executing: {:?}", cmd);
-
     let child = match pty_pair.slave.spawn_command(cmd) {
         Ok(child) => child,
         Err(err) => {
@@ -1130,16 +1532,18 @@ async fn start_build(
         }
     };
 
+    let (input_tx, mut input_rx) = mpsc::channel::<String>(100);
+    let (stdout_tx, _) = broadcast::channel::<String>(200);
+
     let child = Arc::new(StdRwLock::new(child));
-    regiter_process(&action, child.clone()).await;
-    drop(pty_pair.slave);
 
     let reader = match pty_pair.master.try_clone_reader() {
         Ok(reader) => reader,
         Err(err) => {
             send_status(session, "FAILED").await;
-            send_stdout(
+            send_stdout_for_task(
                 session,
+                task_key.as_str(),
                 format!("failed to open PTY reader: {err}").as_str(),
             )
             .await;
@@ -1151,8 +1555,9 @@ async fn start_build(
         Ok(writer) => writer,
         Err(err) => {
             send_status(session, "FAILED").await;
-            send_stdout(
+            send_stdout_for_task(
                 session,
+                task_key.as_str(),
                 format!("failed to open PTY writer: {err}").as_str(),
             )
             .await;
@@ -1160,7 +1565,11 @@ async fn start_build(
         }
     };
 
-    let (sender, mut receiver) = mpsc::channel::<String>(100);
+    register_process(&action, child.clone(), input_tx.clone(), stdout_tx.clone()).await;
+    flush_pending_stdin(task_key.as_str(), stdin_state.clone()).await;
+    drop(pty_pair.slave);
+
+    let (sender, mut receiver) = mpsc::channel::<OutputPacket>(100);
     let tx = sender.clone();
 
     std::thread::spawn(move || {
@@ -1209,26 +1618,20 @@ async fn start_build(
                     break;
                 }
                 Err(err) => {
-                    let _ = tx.blocking_send(format!("PTY read error: {err}"));
+                    let line = format!("PTY read error: {err}");
+
+                    if let Some(payload) = stdout_response_json(line.clone()) {
+                        let _ = tx.blocking_send(OutputPacket {
+                            websocket_payload: payload,
+                            history_chunk: line,
+                        });
+                    }
+
                     break;
                 }
             }
         }
     });
-
-    let (input_tx, mut input_rx) = mpsc::channel::<String>(100);
-
-    {
-        let mut state = stdin_state.lock().await;
-        state.tx = Some(input_tx.clone());
-
-        while let Some(pending) = state.pending.pop_front() {
-            if input_tx.try_send(pending).is_err() {
-                send_stdout(session, "Failed to flush buffered stdin input.").await;
-                break;
-            }
-        }
-    }
 
     // Write WebSocket input to PTY.
     std::thread::spawn(move || {
@@ -1245,9 +1648,14 @@ async fn start_build(
 
     drop(sender);
 
-    while let Some(chunk) = receiver.recv().await {
-        if session.text(chunk).await.is_err() {
-            break;
+    let mut session_open = true;
+
+    while let Some(packet) = receiver.recv().await {
+        append_task_history(task_key.as_str(), packet.history_chunk.as_str()).await;
+        let _ = stdout_tx.send(packet.websocket_payload.clone());
+
+        if session_open && session.text(packet.websocket_payload).await.is_err() {
+            session_open = false;
         }
     }
 
@@ -1260,7 +1668,7 @@ async fn start_build(
         let exit_code = status.exit_code();
         let out = format!("Task finished, exit code: {:?}", exit_code);
 
-        send_stdout(session, out.as_str()).await;
+        send_stdout_for_task(session, task_key.as_str(), out.as_str()).await;
 
         if exit_code == 0 {
             send_status(session, "SUCCESS").await;
@@ -1269,10 +1677,13 @@ async fn start_build(
         }
     } else {
         send_status(session, "FAILED").await;
-        send_stdout(session, "Error").await;
+        send_stdout_for_task(session, task_key.as_str(), "Error").await;
     }
 
     let mut state = stdin_state.lock().await;
-    state.tx = None;
-    state.pending.clear();
+
+    if state.task_key.as_deref() == Some(task_key.as_str()) {
+        state.task_key = None;
+        state.pending.clear();
+    }
 }
