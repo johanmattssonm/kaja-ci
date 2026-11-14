@@ -9,10 +9,8 @@ use gloo_net::{
 };
 use kaja_web::prelude::*;
 use serde::Deserialize;
-use wasm_bindgen::{JsCast, JsValue, prelude::Closure};
+use wasm_bindgen::{JsCast, prelude::Closure};
 use wasm_bindgen_futures::spawn_local;
-
-const ACTIVE_TASK_KEY_KEY: &str = "__kaja_active_task_key";
 
 #[component("console-component")]
 struct Console {
@@ -39,7 +37,6 @@ impl Component for ConsoleComponent {
         self.render();
         focus_console_output(&id);
         ensure_abort_on_exit_handlers();
-        set_active_task_key(None);
 
         if action.is_empty() || project.is_empty() {
             return;
@@ -67,38 +64,20 @@ impl Component for ConsoleComponent {
         }
 
         if abort_task_with_beacon(Some(task_key.as_str()), None) {
-            set_active_task_key(None);
             return;
         }
 
         spawn_local(async move {
             if !abort_task(Some(task_key.as_str()), None).await {
                 log!("Failed to abort task on console disconnect.", task_key);
-            } else {
-                set_active_task_key(None);
             }
         });
     }
 
     fn attribute_changed(&self, name: &str, _old_value: &str, new_value: &str) {
-        if name != "connect" || new_value.is_empty() {
-            return;
+        if name == "connect" {
+            self.handle_connect(new_value);
         }
-
-        let component_id = self.get_id();
-
-        if let Some(component) = get_element_by_id(&component_id) {
-            if component.set_attribute("task_key", new_value).is_err() {
-                log!("Failed to set task_key attribute on console component.");
-            }
-        }
-
-        let task_key = new_value.to_string();
-        set_active_task_key(Some(task_key.as_str()));
-
-        spawn_local(async move {
-            connect_console_view(component_id, task_key).await;
-        });
     }
 }
 
@@ -115,6 +94,36 @@ fn focus_console_output(component_id: &str) {
 }
 
 impl ConsoleComponent {
+    fn handle_connect(&self, new_value: &str) {
+        let component_id = self.get_id();
+        let component = get_element_by_id(&component_id);
+
+        if component.is_none() {
+            log!("No component");
+            return;
+        }
+
+        let component = component.unwrap();
+
+        if new_value.is_empty() {
+            if component.set_attribute("task_key", "").is_err() {
+                log!("Failed to set task_key attribute on console component.");
+                return;
+            }
+        }
+
+        if component.set_attribute("task_key", new_value).is_err() {
+            log!("Failed to set task_key attribute on console component.");
+            return;
+        }
+
+        let task_key = new_value.to_string();
+
+        spawn_local(async move {
+            connect_console_view(component_id, task_key).await;
+        });
+    }
+
     fn render(&self) {
         let id = self.get_id();
         let element = match get_element_by_id(&id) {
@@ -162,38 +171,6 @@ fn abort_endpoint(task_key: Option<&str>, project: Option<&str>) -> Option<Strin
     Some(format!("/abort?{}", query.join("&")))
 }
 
-fn set_window_string(key: &str, value: Option<&str>) {
-    let Some(window) = web_sys::window() else {
-        return;
-    };
-
-    let js_value = match value {
-        Some(value) => JsValue::from_str(value),
-        None => JsValue::NULL,
-    };
-
-    let _ = js_sys::Reflect::set(window.as_ref(), &JsValue::from_str(key), &js_value);
-}
-
-fn get_window_string(key: &str) -> Option<String> {
-    let window = web_sys::window()?;
-    let value = js_sys::Reflect::get(window.as_ref(), &JsValue::from_str(key)).ok()?;
-
-    if value.is_null() || value.is_undefined() {
-        return None;
-    }
-
-    value.as_string().filter(|value| !value.is_empty())
-}
-
-fn set_active_task_key(task_key: Option<&str>) {
-    set_window_string(ACTIVE_TASK_KEY_KEY, task_key);
-}
-
-fn get_active_task_key() -> Option<String> {
-    get_window_string(ACTIVE_TASK_KEY_KEY)
-}
-
 fn abort_task_with_beacon(task_key: Option<&str>, project: Option<&str>) -> bool {
     let Some(endpoint) = abort_endpoint(task_key, project) else {
         return false;
@@ -210,11 +187,7 @@ fn abort_task_with_beacon(task_key: Option<&str>, project: Option<&str>) -> bool
 }
 
 fn abort_console_task_with_beacon() -> bool {
-    let task_key = get_active_task_key().or_else(|| {
-        get_element("console-component")
-            .and_then(|component| component.get_attribute("task_key"))
-            .filter(|value| !value.is_empty())
-    });
+    let task_key = get_attribute("console-component", "task_key");
 
     match task_key {
         Some(task_key) => abort_task_with_beacon(Some(task_key.as_str()), None),
@@ -275,8 +248,10 @@ async fn abort_current_task(project: String) {
 
     if !aborted {
         try_inner_text("#save-status", "Failed to abort task.");
-    } else {
-        set_active_task_key(None);
+    } else if let Some(component) = get_element("console-component") {
+        if component.set_attribute("task_key", "").is_err() {
+            log!("Failed to clear task_key attribute on console component.");
+        }
     }
 }
 
@@ -348,8 +323,6 @@ async fn connect_terminal(project: String) {
         .get_attribute("id")
         .unwrap_or_else(|| "console-component".to_string());
 
-    set_active_task_key(Some(task_key.as_str()));
-
     if console
         .set_attribute("task_key", task_key.as_str())
         .is_err()
@@ -373,8 +346,6 @@ async fn start_and_connect_console_view(id: String, action: &str, project: &str)
         log!("No console component found.", id);
         return;
     };
-
-    set_active_task_key(Some(task_key.as_str()));
 
     if component
         .set_attribute("task_key", task_key.as_str())
