@@ -1,51 +1,94 @@
-use actix_web::http::header::ContentType;
-use actix_web::{Error, HttpResponse, Responder, web};
-use actix_ws::{Message, Session, handle};
-use portable_pty::{Child, CommandBuilder, PtySize, native_pty_system};
+use actix_web::{HttpResponse, Responder, web};
 use serde::Deserialize;
-use std::collections::VecDeque;
-use std::io::{Read, Write};
-use tokio::task;
 
-use std::path::PathBuf;
-use std::sync::{Arc, RwLock as StdRwLock};
-use std::thread;
-use std::time::Duration;
-use tokio::sync::{Mutex, mpsc};
+use crate::app::{APP_DATA, AppData};
 
-use crate::app::APP_DATA;
-use crate::runner::ProjectGetParams;
+#[derive(Deserialize)]
+pub struct AbortParams {
+    pub project: Option<String>,
+    pub task_key: Option<String>,
+}
 
-#[actix_web::get("/abort")]
-pub async fn abort(params: web::Query<ProjectGetParams>) -> impl Responder {
+fn resolve_task_key(app: &AppData, params: &AbortParams) -> Option<String> {
+    if let Some(task_key) = params.task_key.as_deref().filter(|value| !value.is_empty()) {
+        if app.tasks.contains_key(task_key) {
+            return Some(task_key.to_string());
+        }
+    }
+
+    let project = params.project.as_deref()?.trim();
+
+    if project.is_empty() {
+        return None;
+    }
+
+    if app.tasks.contains_key(project) {
+        return Some(project.to_string());
+    }
+
+    if app.running_project == project && !app.running_task_name.is_empty() {
+        return Some(format!("{}-{}", app.running_task_name, app.running_project));
+    }
+
+    None
+}
+
+async fn abort_with_params(params: AbortParams) -> HttpResponse {
     let mut app = APP_DATA.write().await;
 
-    let Some(task) = app.tasks.get_mut(&params.project) else {
-        let mess = format!("No task running for {}", &params.project);
-        println!("{}", mess);
-
+    let Some(task_key) = resolve_task_key(&app, &params) else {
         return HttpResponse::InternalServerError().json(serde_json::json!({
             "ok": false,
-            "message": mess
+            "message": "No matching running task found."
         }));
     };
 
-    let Some(command_lock) = task.running_command.take() else {
-        let mess = format!("No task running for {}", &params.project);
-        println!("{}", mess);
+    let command_lock = match app.tasks.get_mut(&task_key) {
+        Some(task) => match task.running_command.take() {
+            Some(command_lock) => command_lock,
+            None => {
+                let mess = format!("No task running for key {}", task_key);
 
+                return HttpResponse::InternalServerError().json(serde_json::json!({
+                    "ok": false,
+                    "message": mess
+                }));
+            }
+        },
+        None => {
+            let mess = format!("No task running for key {}", task_key);
+
+            return HttpResponse::InternalServerError().json(serde_json::json!({
+                "ok": false,
+                "message": mess
+            }));
+        }
+    };
+
+    let Ok(mut command) = command_lock.write() else {
         return HttpResponse::InternalServerError().json(serde_json::json!({
             "ok": false,
-            "message": mess
+            "message": "Failed to lock running task command."
         }));
     };
 
-    let mut command = command_lock.write().unwrap();
     let _ = command.kill();
+    drop(command);
 
-    let _ = app.tasks.remove(&params.project);
+    let _ = app.drop_task_by_key(task_key.as_str());
 
-    HttpResponse::Ok()
-        .content_type(ContentType::json())
-        .body("{ \"ok\": true }")
+    HttpResponse::Ok().json(serde_json::json!({
+        "ok": true,
+        "task_key": task_key
+    }))
+}
+
+#[actix_web::get("/abort")]
+pub async fn abort(params: web::Query<AbortParams>) -> impl Responder {
+    abort_with_params(params.into_inner()).await
+}
+
+#[actix_web::post("/abort")]
+pub async fn abort_post(params: web::Query<AbortParams>) -> impl Responder {
+    abort_with_params(params.into_inner()).await
 }

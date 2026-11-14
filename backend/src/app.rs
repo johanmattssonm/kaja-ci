@@ -51,6 +51,7 @@ impl AppData {
         &mut self,
         task_type: Option<String>,
         project_folder: Option<String>,
+        task_key: Option<String>,
         command: Arc<StdRwLock<Box<dyn Child + Send + Sync>>>,
         stdin_tx: mpsc::Sender<String>,
         stdout_tx: broadcast::Sender<String>,
@@ -64,7 +65,7 @@ impl AppData {
             return Err("No project folder.".to_string());
         };
 
-        let key = format!("{}-{}", task_type, project_folder);
+        let key = task_key.unwrap_or_else(|| format!("{}-{}", task_type, project_folder));
         println!("Starting task, key: {}", key);
 
         let task = Task {
@@ -107,9 +108,13 @@ impl AppData {
         };
 
         let key = format!("{}-{}", task_type, project_folder);
+        self.drop_task_by_key(key.as_str())
+    }
+
+    pub fn drop_task_by_key(&mut self, key: &str) -> Result<(), String> {
         println!("Dropping task, key: {}", key);
 
-        let Some(task) = self.tasks.get_mut(&key) else {
+        let Some(mut task) = self.tasks.remove(key) else {
             println!("Task was not running.");
             return Err("No task running".to_string());
         };
@@ -118,7 +123,9 @@ impl AppData {
         task.stdin_tx = None;
         task.stdout_tx = None;
 
-        if self.running_task_name == task_type && self.running_project == project_folder {
+        let running_key = format!("{}-{}", self.running_task_name, self.running_project);
+
+        if running_key == key {
             self.running_task = None;
             self.running_task_name.clear();
             self.running_project.clear();

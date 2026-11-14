@@ -7,7 +7,10 @@ use std::fmt::{Display, Formatter, Write as _};
 use std::io::{Read, Write};
 
 use std::path::PathBuf;
-use std::sync::{Arc, RwLock as StdRwLock};
+use std::sync::{
+    Arc, RwLock as StdRwLock,
+    atomic::{AtomicU64, Ordering},
+};
 use std::thread;
 use std::time::Duration;
 use tokio::sync::{Mutex, broadcast, mpsc};
@@ -23,6 +26,12 @@ pub const BUILD_DIR: &str = "/home/johan/Downloads/resting-chair";
 #[derive(Deserialize)]
 pub struct ProjectGetParams {
     pub project: String,
+}
+
+#[derive(Deserialize)]
+pub struct RunGetParams {
+    pub project: String,
+    pub task_key: String,
 }
 
 #[derive(Debug)]
@@ -794,6 +803,24 @@ mod tests {
         assert_eq!(decode_utf8_chunk(&mut pending), "å");
         assert!(pending.is_empty());
     }
+
+    #[test]
+    fn terminal_detached_task_keys_are_unique() {
+        let first = build_detached_task_key("terminal", "/tmp/project");
+        let second = build_detached_task_key("terminal", "/tmp/project");
+
+        assert_ne!(first, second);
+        assert!(is_terminal_task_key(first.as_str()));
+        assert!(is_terminal_task_key(second.as_str()));
+    }
+
+    #[test]
+    fn non_terminal_detached_task_key_uses_default_shape() {
+        assert_eq!(
+            build_detached_task_key("build", "/tmp/project"),
+            "build-/tmp/project"
+        );
+    }
 }
 
 pub async fn websocket(
@@ -813,17 +840,6 @@ pub async fn websocket(
     Ok(response)
 }
 
-fn parse_action(line: String) -> Option<Action> {
-    let action = serde_json::from_str::<Action>(&line);
-
-    if action.is_err() {
-        println!("Failed to parse action: {:?}", line);
-        return None;
-    }
-
-    action.ok()
-}
-
 fn folder_exists(path: &str) -> bool {
     let path = PathBuf::from(path);
 
@@ -837,8 +853,39 @@ fn folder_exists(path: &str) -> bool {
     }
 }
 
+static TERMINAL_TASK_COUNTER: AtomicU64 = AtomicU64::new(1);
+
 fn build_task_key(action: &str, folder: &str) -> String {
     format!("{}-{}", action, folder)
+}
+
+fn is_terminal_action(action: &str) -> bool {
+    action == "terminal"
+}
+
+fn is_terminal_task_key(task_key: &str) -> bool {
+    task_key.starts_with("terminal-")
+}
+
+fn build_detached_task_key(action_name: &str, folder: &str) -> String {
+    if is_terminal_action(action_name) {
+        let id = TERMINAL_TASK_COUNTER.fetch_add(1, Ordering::Relaxed);
+        return format!("terminal-{}-{id}", folder);
+    }
+
+    build_task_key(action_name, folder)
+}
+
+fn normalize_run_task_key(task_key: &str) -> Option<&'static str> {
+    match task_key {
+        "git" => Some("git"),
+        "build" => Some("build"),
+        "test" => Some("test"),
+        "release" => Some("release"),
+        "clean" => Some("clean"),
+        "terminal" => Some("terminal"),
+        _ => None,
+    }
 }
 
 fn task_key_for_action(action: &Action) -> Option<String> {
@@ -855,7 +902,7 @@ async fn task_stdin_sender(task_key: &str) -> Option<mpsc::Sender<String>> {
 }
 
 async fn append_task_history(task_key: &str, output: &str) {
-    if output.is_empty() {
+    if output.is_empty() || is_terminal_task_key(task_key) {
         return;
     }
 
@@ -919,7 +966,7 @@ async fn attach_to_running_task(
         (task.history.clone(), stdout_tx.subscribe())
     };
 
-    if !history.is_empty() {
+    if !history.is_empty() && !is_terminal_task_key(task_key) {
         let history_action = ActionResponse {
             stdout: Some(String::from_utf8_lossy(&history).into_owned()),
             action: "STDOUT".to_string(),
@@ -956,19 +1003,10 @@ async fn attach_to_running_task(
 }
 
 async fn process_action(
-    text: String,
+    action: Action,
     session: &mut Session,
     stdin_state: Arc<Mutex<BuildInputState>>,
 ) {
-    let action = parse_action(text);
-
-    if action.is_none() {
-        println!("Malformed action");
-        return;
-    }
-
-    let action = action.unwrap();
-
     let folder = match action.folder.as_deref() {
         Some(folder) => folder,
         None => {
@@ -1006,6 +1044,31 @@ async fn process_action(
     actix_web::rt::spawn(async move {
         start_build(&mut build_session, build_stdin_state, action, task_key).await;
     });
+}
+
+async fn process_attach_action(
+    action: Action,
+    session: &mut Session,
+    stdin_state: Arc<Mutex<BuildInputState>>,
+) {
+    let Some(task_key) = action.task_key else {
+        send_stdout(session, "Attach action is missing task_key.").await;
+        send_status(session, "FAILED").await;
+        return;
+    };
+
+    {
+        let mut state = stdin_state.lock().await;
+        state.task_key = Some(task_key.clone());
+    }
+
+    if attach_to_running_task(session, stdin_state, task_key.as_str()).await {
+        return;
+    }
+
+    let message = format!("No running task found for key '{}'.", task_key);
+    send_stdout(session, message.as_str()).await;
+    send_status(session, "FAILED").await;
 }
 
 async fn send_stdout(session: &mut Session, line: &str) {
@@ -1086,9 +1149,15 @@ async fn process_ws_message(
 
     if action.stdin.is_some() {
         process_std_in(action, stdin_state).await;
-    } else {
-        process_action(text, session, stdin_state).await;
+        return;
     }
+
+    if action.action == "attach" {
+        process_attach_action(action, session, stdin_state).await;
+        return;
+    }
+
+    process_action(action, session, stdin_state).await;
 }
 
 async fn process_std_in(action: Action, stdin_state: Arc<Mutex<BuildInputState>>) {
@@ -1144,12 +1213,11 @@ fn command_to_executable(action: &Action) -> Option<CommandBuilder> {
 
     match action.action.as_str() {
         "build" => parse_command(config_commands.build, folder).ok(),
-        "fetch" => parse_command(config_commands.git, folder).ok(),
+        "git" => parse_command(config_commands.git, folder).ok(),
         "test" => parse_command(config_commands.test, folder).ok(),
         "release" => parse_command(config_commands.release, folder).ok(),
         "clean" => parse_command(config_commands.clean, folder).ok(),
-        "terminal" => parse_command(config_commands.terminal.clone(), folder).ok(),
-        "run" => parse_command(config_commands.terminal, folder).ok(),
+        "terminal" => parse_command(config_commands.terminal, folder).ok(),
         _ => {
             println!("Unknown action {}", action.action);
             None
@@ -1183,6 +1251,7 @@ async fn register_process(
     let _ = APP_DATA.write().await.start_task(
         Some(action.action.clone()),
         action.folder.clone(),
+        None,
         process,
         stdin_tx,
         stdout_tx,
@@ -1215,20 +1284,54 @@ fn wait_for_exit(
     }
 }
 
-pub async fn start_run_task(project_folder: String) -> Result<String, RunTaskError> {
-    start_detached_action("run", project_folder).await
+pub async fn start_run_task(
+    project_folder: String,
+    run_task_key: String,
+) -> Result<String, RunTaskError> {
+    let Some(action_name) = normalize_run_task_key(run_task_key.as_str()) else {
+        return Err(RunTaskError::NoCommandConfigured(run_task_key));
+    };
+
+    start_detached_action(action_name, project_folder).await
+}
+
+async fn check_requested_task_state(
+    action_name: &str,
+    requested_task_key: &str,
+) -> Result<Option<String>, RunTaskError> {
+    let app = APP_DATA.read().await;
+
+    if is_terminal_action(action_name) {
+        return Ok(None);
+    }
+
+    if let Some(task) = app.tasks.get(requested_task_key) {
+        if task.running_command.is_some() {
+            return Ok(Some(requested_task_key.to_string()));
+        }
+    }
+
+    if app.has_running_task() {
+        return Err(RunTaskError::AlreadyRunning);
+    }
+
+    Ok(None)
 }
 
 async fn start_detached_action(
     action_name: &str,
     project_folder: String,
 ) -> Result<String, RunTaskError> {
-    if APP_DATA.read().await.has_running_task() {
-        return Err(RunTaskError::AlreadyRunning);
-    }
-
     if !folder_exists(project_folder.as_str()) {
         return Err(RunTaskError::InvalidProjectFolder);
+    }
+
+    let requested_task_key = build_detached_task_key(action_name, project_folder.as_str());
+    let existing_task_key =
+        check_requested_task_state(action_name, requested_task_key.as_str()).await?;
+
+    if let Some(existing_task_key) = existing_task_key {
+        return Ok(existing_task_key);
     }
 
     let action_name = action_name.to_string();
@@ -1238,6 +1341,7 @@ async fn start_detached_action(
         command: None,
         folder: Some(project_folder.clone()),
         stdin: None,
+        task_key: None,
     };
 
     let Some(cmd) = command_to_executable(&action) else {
@@ -1292,6 +1396,7 @@ async fn start_detached_action(
         match app.start_task(
             Some(action_name.clone()),
             Some(project_folder.clone()),
+            Some(requested_task_key.clone()),
             child.clone(),
             input_tx,
             stdout_tx.clone(),
@@ -1371,8 +1476,6 @@ async fn start_detached_action(
 
     let task_key_exit = task_key.clone();
     let stdout_tx_exit = stdout_tx.clone();
-    let action_name_exit = action_name.clone();
-    let project_folder_exit = project_folder.clone();
     let child_exit = child.clone();
 
     std::thread::spawn(move || {
@@ -1395,7 +1498,7 @@ async fn start_detached_action(
         }
 
         let mut app = APP_DATA.blocking_write();
-        let _ = app.drop_task(Some(action_name_exit), Some(project_folder_exit));
+        let _ = app.drop_task_by_key(task_key_exit.as_str());
     });
 
     Ok(task_key)
@@ -1424,7 +1527,7 @@ fn status_response_json(line: &str) -> Option<String> {
 }
 
 fn append_task_history_blocking(task_key: &str, output: &str) {
-    if output.is_empty() {
+    if output.is_empty() || is_terminal_task_key(task_key) {
         return;
     }
 

@@ -6,6 +6,7 @@ pub struct Action {
     pub command: Option<String>,
     pub folder: Option<String>,
     pub stdin: Option<String>,
+    pub task_key: Option<String>,
 }
 
 #[derive(Serialize, Deserialize, Debug, Default)]

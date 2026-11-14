@@ -1,11 +1,11 @@
 use actix_web::http::header::ContentType;
 use actix_web::{HttpResponse, Responder, web};
 
-use crate::runner::{ProjectGetParams, RunTaskError, start_run_task};
+use crate::runner::{RunGetParams, RunTaskError, start_run_task};
 
 #[actix_web::get("/run")]
-pub async fn run(params: web::Query<ProjectGetParams>) -> impl Responder {
-    match start_run_task(params.project.clone()).await {
+pub async fn run(params: web::Query<RunGetParams>) -> impl Responder {
+    match start_run_task(params.project.clone(), params.task_key.clone()).await {
         Ok(task_key) => HttpResponse::Ok().json(serde_json::json!({
             "ok": true,
             "task": task_key

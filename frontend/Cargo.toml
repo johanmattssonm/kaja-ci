@@ -14,10 +14,10 @@ inventory = "0.3.25"
 js-sys = "0.3.107"
 kaja-callback-macro = "1.0.2"
 kaja-html-macro = "1.0.5"
-kaja-web = "1.0.7"
+kaja-web = { path = "/home/johan/kaja/kaja-web" }
 kaja-web-component = "1.0.2"
 wasm-bindgen = "0.2.130"
-web-sys = { version = "0.3.107", features = ["Window", "Document", "Element", "EventTarget", "HtmlInputElement", "KeyboardEvent"] }
+web-sys = { version = "0.3.107", features = ["Window", "Document", "Element", "Event", "EventTarget", "Navigator", "HtmlElement", "HtmlInputElement", "KeyboardEvent"] }
 futures-util = "0.3"
 futures-channel = "0.3"
 wasm-bindgen-futures = "0.4"

@@ -22,7 +22,7 @@ pub async fn fetch(params: web::Query<ProjectGetParams>) -> impl Responder {
                     <a class="top-bar-link" href="/">Home</a>
                     <a class="top-bar-link" href="#" onclick="abort('$(params.project)')">Abort</a>
                 </nav>
-                <console-component project="$(params.project)" action="fetch"></console-component>
+                <console-component project="$(params.project)" action="git"></console-component>
             </body>
         </html>
     }};

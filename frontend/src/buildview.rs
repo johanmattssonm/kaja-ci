@@ -8,8 +8,11 @@ use gloo_net::{
     websocket::{Message, futures::WebSocket},
 };
 use kaja_web::prelude::*;
-use wasm_bindgen::{JsCast, prelude::Closure};
+use serde::Deserialize;
+use wasm_bindgen::{JsCast, JsValue, prelude::Closure};
 use wasm_bindgen_futures::spawn_local;
+
+const ACTIVE_TASK_KEY_KEY: &str = "__kaja_active_task_key";
 
 #[component("console-component")]
 struct Console {
@@ -18,47 +21,97 @@ struct Console {
 
     #[attribute]
     action: String,
+
+    #[attribute]
+    connect: String,
+
+    #[attribute]
+    task_key: String,
 }
 
 impl Component for ConsoleComponent {
     fn connected(&self) {
         let id = self.get_id();
-        let action: Option<String> = self.get_attribute("action");
-        let project: Option<String> = self.get_attribute("project");
+        let action: String = self.get_attribute("action").unwrap_or_default();
+        let project: String = self.get_attribute("project").unwrap_or_default();
 
         log!("Connected:", &id);
         self.render();
+        focus_console_output(&id);
+        ensure_abort_on_exit_handlers();
+        set_active_task_key(None);
 
-        if action.is_none() {
-            log!("No action for console.");
+        if action.is_empty() || project.is_empty() {
             return;
         }
 
-        if project.is_none() {
-            log!("No project for console.");
+        if action == "terminal" {
             return;
         }
 
         let component_id = id.clone();
 
-        spawn_local(async {
-            let action = action.unwrap();
-            let project = project.unwrap();
-            connect_console_view(component_id, action.as_str(), project.as_str()).await;
+        spawn_local(async move {
+            start_and_connect_console_view(component_id, action.as_str(), project.as_str()).await;
         });
-
-        if let Some(element) = get_element_by_id(&format!("{}-output", &id)) {
-            if let Ok(output) = element.dyn_into::<web_sys::HtmlElement>() {
-                let _ = output.focus();
-            }
-        }
     }
 
     fn disconnected(&self) {
-        log!("Disconnected:", self.get_id());
+        let id = self.get_id();
+        log!("Disconnected:", &id);
+
+        let task_key: String = self.get_attribute("task_key").unwrap_or_default();
+
+        if task_key.is_empty() {
+            return;
+        }
+
+        if abort_task_with_beacon(Some(task_key.as_str()), None) {
+            set_active_task_key(None);
+            return;
+        }
+
+        spawn_local(async move {
+            if !abort_task(Some(task_key.as_str()), None).await {
+                log!("Failed to abort task on console disconnect.", task_key);
+            } else {
+                set_active_task_key(None);
+            }
+        });
     }
 
-    fn attribute_changed(&self, _name: &str, _old_value: &str, _new_value: &str) {}
+    fn attribute_changed(&self, name: &str, _old_value: &str, new_value: &str) {
+        if name != "connect" || new_value.is_empty() {
+            return;
+        }
+
+        let component_id = self.get_id();
+
+        if let Some(component) = get_element_by_id(&component_id) {
+            if component.set_attribute("task_key", new_value).is_err() {
+                log!("Failed to set task_key attribute on console component.");
+            }
+        }
+
+        let task_key = new_value.to_string();
+        set_active_task_key(Some(task_key.as_str()));
+
+        spawn_local(async move {
+            connect_console_view(component_id, task_key).await;
+        });
+    }
+}
+
+fn focus_console_output(component_id: &str) {
+    let Some(element) = get_element_by_id(&format!("{}-output", component_id)) else {
+        return;
+    };
+
+    let Ok(output) = element.dyn_into::<web_sys::HtmlElement>() else {
+        return;
+    };
+
+    let _ = output.focus();
 }
 
 impl ConsoleComponent {
@@ -87,20 +140,263 @@ impl ConsoleComponent {
     }
 }
 
-#[callback("abort")]
-async fn abort_current_task(project: String) {
-    let endpoint = format!("/abort?project={}", project);
+fn url_encode(value: &str) -> String {
+    js_sys::encode_uri_component(value).into()
+}
 
-    if Request::get(endpoint.as_str()).send().await.is_err() {
-        try_inner_text("#save-status", "Failed to abort task.");
+fn abort_endpoint(task_key: Option<&str>, project: Option<&str>) -> Option<String> {
+    let mut query = Vec::new();
+
+    if let Some(task_key) = task_key.filter(|value| !value.is_empty()) {
+        query.push(format!("task_key={}", url_encode(task_key)));
+    }
+
+    if let Some(project) = project.filter(|value| !value.is_empty()) {
+        query.push(format!("project={}", url_encode(project)));
+    }
+
+    if query.is_empty() {
+        return None;
+    }
+
+    Some(format!("/abort?{}", query.join("&")))
+}
+
+fn set_window_string(key: &str, value: Option<&str>) {
+    let Some(window) = web_sys::window() else {
+        return;
+    };
+
+    let js_value = match value {
+        Some(value) => JsValue::from_str(value),
+        None => JsValue::NULL,
+    };
+
+    let _ = js_sys::Reflect::set(window.as_ref(), &JsValue::from_str(key), &js_value);
+}
+
+fn get_window_string(key: &str) -> Option<String> {
+    let window = web_sys::window()?;
+    let value = js_sys::Reflect::get(window.as_ref(), &JsValue::from_str(key)).ok()?;
+
+    if value.is_null() || value.is_undefined() {
+        return None;
+    }
+
+    value.as_string().filter(|value| !value.is_empty())
+}
+
+fn set_active_task_key(task_key: Option<&str>) {
+    set_window_string(ACTIVE_TASK_KEY_KEY, task_key);
+}
+
+fn get_active_task_key() -> Option<String> {
+    get_window_string(ACTIVE_TASK_KEY_KEY)
+}
+
+fn abort_task_with_beacon(task_key: Option<&str>, project: Option<&str>) -> bool {
+    let Some(endpoint) = abort_endpoint(task_key, project) else {
+        return false;
+    };
+
+    let Some(window) = web_sys::window() else {
+        return false;
+    };
+
+    window
+        .navigator()
+        .send_beacon(endpoint.as_str())
+        .unwrap_or(false)
+}
+
+fn abort_console_task_with_beacon() -> bool {
+    let task_key = get_active_task_key().or_else(|| {
+        get_element("console-component")
+            .and_then(|component| component.get_attribute("task_key"))
+            .filter(|value| !value.is_empty())
+    });
+
+    match task_key {
+        Some(task_key) => abort_task_with_beacon(Some(task_key.as_str()), None),
+        None => false,
     }
 }
 
-async fn connect_console_view(id: String, action: &str, project: &str) {
+#[callback("abortConsoleTaskOnExit")]
+fn abort_console_task_on_exit(_event: web_sys::Event) {
+    let _ = abort_console_task_with_beacon();
+}
+
+fn ensure_abort_on_exit_handlers() {
+    let Some(window) = web_sys::window() else {
+        return;
+    };
+
+    let Some(abort_on_exit) = get_callback("abortConsoleTaskOnExit") else {
+        log!("Missing abortConsoleTaskOnExit callback.");
+        return;
+    };
+
+    let _ = window.remove_event_listener_with_callback("pagehide", &abort_on_exit);
+    let _ = window.remove_event_listener_with_callback("beforeunload", &abort_on_exit);
+
+    let pagehide = window
+        .add_event_listener_with_callback("pagehide", &abort_on_exit)
+        .is_ok();
+
+    let beforeunload = window
+        .add_event_listener_with_callback("beforeunload", &abort_on_exit)
+        .is_ok();
+
+    if !pagehide && !beforeunload {
+        log!("Failed to register abort handlers for page exit.");
+    }
+}
+
+async fn abort_task(task_key: Option<&str>, project: Option<&str>) -> bool {
+    let Some(endpoint) = abort_endpoint(task_key, project) else {
+        return false;
+    };
+
+    Request::get(endpoint.as_str()).send().await.is_ok()
+}
+
+#[callback("abort")]
+async fn abort_current_task(project: String) {
+    let task_key: Option<String> =
+        get_element("console-component").and_then(|component| component.get_attribute("task_key"));
+    let task_key = task_key.filter(|value| !value.is_empty());
+
+    let aborted = if let Some(task_key) = task_key {
+        abort_task(Some(task_key.as_str()), None).await
+    } else {
+        abort_task(None, Some(project.as_str())).await
+    };
+
+    if !aborted {
+        try_inner_text("#save-status", "Failed to abort task.");
+    } else {
+        set_active_task_key(None);
+    }
+}
+
+#[derive(Deserialize)]
+struct RunTaskResponse {
+    ok: bool,
+    task: Option<String>,
+    message: Option<String>,
+}
+
+async fn start_task(project: &str, action: &str) -> Option<String> {
+    let endpoint = format!("/run?project={}&task_key={}", project, action);
+
+    let response = match Request::get(endpoint.as_str()).send().await {
+        Ok(response) => response,
+        Err(err) => {
+            log!("Failed to start task", format!("{err:?}"));
+            return None;
+        }
+    };
+
+    let body = match response.text().await {
+        Ok(body) => body,
+        Err(err) => {
+            log!("Failed to read /run response", format!("{err:?}"));
+            return None;
+        }
+    };
+
+    let payload: RunTaskResponse = match serde_json::from_str(body.as_str()) {
+        Ok(payload) => payload,
+        Err(err) => {
+            log!("Invalid /run response", format!("{err:?}"));
+            return None;
+        }
+    };
+
+    if payload.ok {
+        if let Some(task) = payload.task {
+            return Some(task);
+        }
+
+        log!("Missing task key in /run response");
+        return None;
+    }
+
+    if let Some(message) = payload.message {
+        log!("/run failed", message);
+    } else {
+        log!("/run failed");
+    }
+
+    None
+}
+
+#[callback("connectTerminal")]
+async fn connect_terminal(project: String) {
+    let Some(task_key) = start_task(project.as_str(), "terminal").await else {
+        log!("Failed to start terminal.");
+        return;
+    };
+
+    let Some(console) = get_element("console-component") else {
+        log!("No console component found.");
+        return;
+    };
+
+    let console_id = console
+        .get_attribute("id")
+        .unwrap_or_else(|| "console-component".to_string());
+
+    set_active_task_key(Some(task_key.as_str()));
+
+    if console
+        .set_attribute("task_key", task_key.as_str())
+        .is_err()
+    {
+        log!("Failed to set task_key attribute on terminal console.");
+    }
+
+    if console.set_attribute("connect", task_key.as_str()).is_err() {
+        log!("Failed to set connect attribute on terminal console.");
+    }
+
+    focus_console_output(&console_id);
+}
+
+async fn start_and_connect_console_view(id: String, action: &str, project: &str) {
+    let Some(task_key) = start_task(project, action).await else {
+        return;
+    };
+
+    let Some(component) = get_element_by_id(&id) else {
+        log!("No console component found.", id);
+        return;
+    };
+
+    set_active_task_key(Some(task_key.as_str()));
+
+    if component
+        .set_attribute("task_key", task_key.as_str())
+        .is_err()
+    {
+        log!("Failed to set task_key attribute on console component.");
+    }
+
+    if component
+        .set_attribute("connect", task_key.as_str())
+        .is_err()
+    {
+        log!("Failed to set connect attribute on console component.");
+    }
+}
+
+async fn connect_console_view(id: String, task_key: String) {
     let ws = WebSocket::open("ws://127.0.0.1:2003/ws");
 
     if ws.is_err() {
         log!("Failed to open websocket");
+        try_inner_text("#status", "disconnected");
         return;
     }
 
@@ -120,17 +416,24 @@ async fn connect_console_view(id: String, action: &str, project: &str) {
 
     setup_stdin_handler(&id, input_tx.clone());
 
-    let project_action = Action {
-        action: action.to_string(),
-        folder: Some(project.to_string()),
-        command: Some("/home/johan/Downloads/resting-chair/test.sh".to_string()),
+    let attach_action = Action {
+        action: "attach".to_string(),
+        folder: None,
+        command: None,
         stdin: None,
+        task_key: Some(task_key),
     };
 
-    let json_string = serde_json::to_string(&project_action).unwrap();
+    let json_string = match serde_json::to_string(&attach_action) {
+        Ok(json) => json,
+        Err(err) => {
+            log!("Failed to serialize attach action", format!("{err:?}"));
+            return;
+        }
+    };
 
     if let Err(err) = input_tx.unbounded_send(json_string) {
-        log!("Failed to enqueue action message", format!("{err:?}"));
+        log!("Failed to enqueue attach action", format!("{err:?}"));
         return;
     }
 
@@ -144,10 +447,12 @@ async fn connect_console_view(id: String, action: &str, project: &str) {
             }
             Err(err) => {
                 log!("WebSocket receive error", format!("{err:?}"));
-                return;
+                break;
             }
         }
     }
+
+    try_inner_text("#status", "disconnected");
 }
 
 fn single_char_key(key: &str) -> Option<char> {
@@ -204,6 +509,7 @@ fn send_stdin(stdin: String, input_tx: &mpsc::UnboundedSender<String>) {
         command: None,
         folder: None,
         stdin: Some(stdin),
+        task_key: None,
     };
 
     let json = serde_json::to_string(&action);
