@@ -33,4 +33,13 @@ pub struct BuildCommands {
     pub clean: Option<String>,
     pub terminal: Option<String>,
     pub custom_comands: Option<Vec<CustomCommand>>,
+    pub tasks: Option<Vec<String>>,
+}
+
+#[derive(Serialize, Clone, Debug)]
+pub struct TaskRunningStatus {
+    pub ok: bool,
+    pub running: bool,
+    pub task_key: String,
+    pub time: String,
 }

@@ -1,5 +1,6 @@
 use kaja_web::prelude::*;
 
+mod buildstatus;
 mod color;
 mod consolecompoent;
 mod projectstatus;

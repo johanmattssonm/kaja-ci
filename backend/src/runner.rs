@@ -60,7 +60,7 @@ impl Display for RunTaskError {
 }
 
 #[derive(Default)]
-struct BuildInputState {
+pub struct BuildInputState {
     task_key: Option<String>,
     pending: VecDeque<String>,
 }
@@ -1425,16 +1425,15 @@ async fn check_requested_task_state(
     action_name: &str,
     requested_task_key: &str,
 ) -> Result<Option<String>, RunTaskError> {
-    let app = APP_DATA.read().await;
+    let mut app = APP_DATA.write().await;
+    app.reconcile_running_state();
 
     if is_terminal_action(action_name) {
         return Ok(None);
     }
 
-    if let Some(task) = app.tasks.get(requested_task_key) {
-        if task.running_command.is_some() {
-            return Ok(Some(requested_task_key.to_string()));
-        }
+    if app.task_is_running(requested_task_key) {
+        return Ok(Some(requested_task_key.to_string()));
     }
 
     if app.has_running_task() {
@@ -1635,24 +1634,27 @@ async fn start_detached_action(
     std::thread::spawn(move || {
         let status = wait_for_exit(child_exit);
 
-        if let Ok(status) = status {
+        let ok = if let Ok(status) = status {
             let exit_code = status.exit_code();
             let out = format!("Task finished, exit code: {:?}", exit_code);
             broadcast_task_stdout(task_key_exit.as_str(), &stdout_tx_exit, out);
 
             if exit_code == 0 {
                 broadcast_task_status(&stdout_tx_exit, "SUCCESS");
+                true
             } else {
                 broadcast_task_status(&stdout_tx_exit, "FAILED");
+                false
             }
         } else {
             let out = "Task failed while waiting for exit.".to_string();
             broadcast_task_stdout(task_key_exit.as_str(), &stdout_tx_exit, out);
             broadcast_task_status(&stdout_tx_exit, "FAILED");
-        }
+            false
+        };
 
         let mut app = APP_DATA.blocking_write();
-        let _ = app.drop_task_by_key(task_key_exit.as_str());
+        let _ = app.drop_task_by_key_with_status(task_key_exit.as_str(), Some(ok));
     });
 
     Ok(task_key)

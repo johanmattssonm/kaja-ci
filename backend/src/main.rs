@@ -13,13 +13,14 @@ mod run;
 mod runner;
 mod settings;
 mod status;
+mod taskrunner;
 mod terminal;
 mod test;
 
 #[actix_web::main]
 async fn main() -> std::io::Result<()> {
     println!("Starting Kaja CI build server");
-    println!("WebSocket server: ws://127.0.0.1:2003/ws");
+    println!("WebSocket server: ws://127.0.0.1:2003/runner");
     println!("Frontend: http://127.0.0.1:2003/");
 
     HttpServer::new(|| {
@@ -38,9 +39,11 @@ async fn main() -> std::io::Result<()> {
             .service(clean::clean)
             .service(terminal::terminal)
             .service(run::run)
+            .service(taskrunner::run)
             .service(status::status)
             .service(custom::custom)
-            .route("/ws", web::get().to(runner::websocket))
+            .route("/runner", web::get().to(runner::websocket))
+            .route("/task", web::get().to(taskrunner::websocket))
     })
     .bind(("127.0.0.1", 2003))?
     .run()

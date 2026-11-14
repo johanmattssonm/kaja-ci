@@ -72,7 +72,11 @@ impl Component for ProjectStatusComponent {
         log!("Disconnected:", self.get_id());
     }
 
-    fn attribute_changed(&self, _name: &str, _old_value: &str, _new_value: &str) {
+    fn attribute_changed(&self, name: &str, _old_value: &str, _new_value: &str) {
+        if name != "project" && name != "custom" {
+            return;
+        }
+
         self.render();
     }
 }
@@ -93,8 +97,10 @@ impl ProjectStatusComponent {
         let custom_actions: Vec<CustomCommand> = self.get_attribute("custom").unwrap_or_default();
 
         let content = html! {{
-            <p>$project</p>
+            <p>$project branch <build-status project="$project"></build-status></p>
             <div class="project-actions">
+                <button class="project-action-button" onclick="runAll('$project')">Run</button>
+
                 <rust>
                     let attr: String = self.get_attribute("git").unwrap_or_default();
 
@@ -184,6 +190,19 @@ fn go_to(url: String) {
     };
 
     let _ = window.location().set_href(url.as_str());
+}
+
+#[callback("runAll")]
+async fn run_all(project: String) {
+    let endpoint = format!("/run-all?project={}", project);
+    match Request::get(endpoint.as_str()).send().await {
+        Ok(_) => {
+            log!("Running all tasks.");
+        }
+        Err(_) => {
+            log!("Failed to run all tasks.");
+        }
+    };
 }
 
 async fn load_settings(project: &str) -> Option<BuildCommands> {

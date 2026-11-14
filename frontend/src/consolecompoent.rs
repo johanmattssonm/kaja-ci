@@ -542,7 +542,7 @@ async fn start_and_connect_console_view(action: &str, project: &str) {
 }
 
 async fn connect_console_view(id: String, task_key: String) {
-    let ws = WebSocket::open("ws://127.0.0.1:2003/ws");
+    let ws = WebSocket::open("ws://127.0.0.1:2003/runner");
 
     if ws.is_err() {
         log!("Failed to open websocket");

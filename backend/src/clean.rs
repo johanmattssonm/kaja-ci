@@ -20,8 +20,8 @@ pub async fn clean(params: web::Query<ProjectGetParams>) -> impl Responder {
             <body>
                 <nav class="top-bar" aria-label="Primary">
                     <a class="top-bar-link" href="/">Home</a>
-                    <a class="top-bar-link" href="#" onclick="startTask('$(params.project)', 'clean')">Run</a>
-                    <a class="top-bar-link" href="#" onclick="abort('$(params.project)')">Abort</a>
+                    <a class="top-bar-link" href="#" data-project="$(params.project)" data-action="clean" onclick="startTask(this.dataset.project, this.dataset.action)">Run</a>
+                    <a class="top-bar-link" href="#" data-project="$(params.project)" onclick="abort(this.dataset.project)">Abort</a>
                 </nav>
                 <console-component project="$(params.project)" action="clean"></console-component>
             </body>

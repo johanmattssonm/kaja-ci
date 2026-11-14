@@ -27,6 +27,9 @@ pub async fn settings(params: web::Query<ProjectGetParams>) -> impl Responder {
     }
 
     let commands_json = serde_json::to_string(&settings.custom_comands).unwrap();
+    let default_tasks = vec!["git".to_string(), "build".to_string(), "test".to_string()];
+    let tasks = settings.tasks.unwrap_or(default_tasks);
+    let tasks_json = serde_json::to_string(&tasks).unwrap_or_else(|_| "[]".to_string());
 
     let content = html! {{
         <!doctype html>
@@ -54,6 +57,7 @@ pub async fn settings(params: web::Query<ProjectGetParams>) -> impl Responder {
                         clean="$(settings.clean.unwrap_or_default())"
                         terminal="$(settings.terminal.unwrap_or_default())"
                         custom="$(commands_json)"
+                        tasks="$(tasks_json)"
                     >
                     </project-settings>
                 </main>
@@ -81,6 +85,11 @@ pub async fn save_settings(
                 .as_deref()
                 .is_some_and(|command| !command.trim().is_empty())
         });
+    }
+
+    if let Some(tasks) = build_commands.tasks.as_mut() {
+        tasks.retain(|task| !task.trim().is_empty());
+        tasks.dedup();
     }
 
     let update_settings = serde_json::to_string_pretty(&build_commands);

@@ -4,6 +4,8 @@ use std::sync::LazyLock;
 use std::sync::{Arc, RwLock as StdRwLock};
 use tokio::sync::{RwLock, broadcast, mpsc};
 
+use crate::taskrunner::send_task_status;
+
 // The app can have one builder running and many terminals attached.
 pub struct AppData {
     pub running_project: String,
@@ -33,17 +35,53 @@ pub static APP_DATA: LazyLock<RwLock<AppData>> = LazyLock::new(|| {
 });
 
 impl AppData {
+    fn is_task_command_running(task: &Task) -> bool {
+        let Some(command_lock) = task.running_command.as_ref() else {
+            return false;
+        };
+
+        let Ok(mut command) = command_lock.write() else {
+            return false;
+        };
+
+        matches!(command.try_wait(), Ok(None))
+    }
+
+    pub fn task_is_running(&self, task_key: &str) -> bool {
+        self.tasks
+            .get(task_key)
+            .is_some_and(Self::is_task_command_running)
+    }
+
     pub fn has_running_task(&self) -> bool {
         if self.running_task_name.is_empty() || self.running_project.is_empty() {
             return false;
         }
 
         let running_key = format!("{}-{}", self.running_task_name, self.running_project);
+        self.task_is_running(running_key.as_str())
+    }
 
-        self.tasks
-            .get(running_key.as_str())
-            .and_then(|task| task.running_command.as_ref())
-            .is_some()
+    pub fn reconcile_running_state(&mut self) {
+        if self.running_task_name.is_empty() || self.running_project.is_empty() {
+            return;
+        }
+
+        let running_key = format!("{}-{}", self.running_task_name, self.running_project);
+
+        if self.task_is_running(running_key.as_str()) {
+            return;
+        }
+
+        if let Some(task) = self.tasks.get_mut(running_key.as_str()) {
+            task.running_command = None;
+            task.stdin_tx = None;
+            task.stdout_tx = None;
+        }
+
+        self.running_task = None;
+        self.running_task_name.clear();
+        self.running_project.clear();
     }
 
     pub fn running_project(&self) -> String {
@@ -127,9 +165,27 @@ impl AppData {
     }
 
     pub fn drop_task_by_key(&mut self, key: &str) -> Result<(), String> {
+        self.drop_task_by_key_with_status(key, Some(false))
+    }
+
+    pub fn drop_task_by_key_with_status(
+        &mut self,
+        key: &str,
+        ok: Option<bool>,
+    ) -> Result<(), String> {
         println!("Dropping task, key: {}", key);
 
         let running_key = format!("{}-{}", self.running_task_name, self.running_project);
+
+        let (status_action, status_project): (Option<String>, Option<String>) =
+            if running_key == key {
+                (
+                    (!self.running_task_name.is_empty()).then_some(self.running_task_name.clone()),
+                    (!self.running_project.is_empty()).then_some(self.running_project.clone()),
+                )
+            } else {
+                (None, None)
+            };
 
         let Some(task) = self.tasks.get_mut(key) else {
             println!("Task was not running.");
@@ -138,6 +194,12 @@ impl AppData {
                 self.running_task = None;
                 self.running_task_name.clear();
                 self.running_project.clear();
+                send_task_status(
+                    key,
+                    ok.unwrap_or(false),
+                    status_action.as_deref(),
+                    status_project.as_deref(),
+                );
                 return Ok(());
             }
 
@@ -154,6 +216,13 @@ impl AppData {
             self.running_task_name.clear();
             self.running_project.clear();
         }
+
+        send_task_status(
+            key,
+            ok.unwrap_or(false),
+            status_action.as_deref(),
+            status_project.as_deref(),
+        );
 
         Ok(())
     }

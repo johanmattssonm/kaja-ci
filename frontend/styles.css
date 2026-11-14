@@ -118,6 +118,58 @@ button:hover {
     background: #1b1b1b;
 }
 
+.setting-row-label {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    margin-bottom: 6px;
+}
+
+.setting-default-checkbox {
+    appearance: none;
+    -webkit-appearance: none;
+    width: 14px;
+    height: 14px;
+    padding: 0;
+    margin: 0;
+    border: 1px solid #7f8a9a;
+    border-radius: 3px;
+    background: #1f2329;
+    cursor: pointer;
+    display: inline-grid;
+    place-content: center;
+}
+
+.setting-default-checkbox::before {
+    content: "";
+    width: 8px;
+    height: 8px;
+    transform: scale(0);
+    transition: transform 120ms ease-in-out;
+    box-shadow: inset 1em 1em #7db7ff;
+    clip-path: polygon(14% 44%, 0 59%, 42% 100%, 100% 26%, 84% 12%, 43% 62%);
+}
+
+.setting-default-checkbox:checked {
+    border-color: #7db7ff;
+    background: #182233;
+}
+
+.setting-default-checkbox:checked::before {
+    transform: scale(1);
+}
+
+.setting-default-checkbox:focus-visible {
+    outline: 2px solid #6ea8ff;
+    outline-offset: 2px;
+}
+
+.custom-command-inputs {
+    display: grid;
+    gap: 6px;
+    margin-top: 6px;
+}
+
 .project-actions {
     display: flex;
     flex-wrap: wrap;
