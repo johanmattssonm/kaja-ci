@@ -2,6 +2,7 @@ use crate::rest::{BuildCommands, CustomCommand};
 
 use gloo_net::http::Request;
 use kaja_web::prelude::*;
+use serde::Deserialize;
 use wasm_bindgen_futures::spawn_local;
 
 #[component("project-status")]
@@ -32,9 +33,12 @@ impl Component for ProjectStatusComponent {
 
         let project: String = self.get_attribute("project").unwrap_or_default();
 
+        let project_for_settings = project.clone();
+        let id_for_settings = id.clone();
+
         spawn_local(async move {
-            let settings = load_settings(&project).await;
-            let element = get_element_by_id(&id);
+            let settings = load_settings(&project_for_settings).await;
+            let element = get_element_by_id(&id_for_settings);
 
             if element.is_none() {
                 log!("Missing component.");
@@ -66,6 +70,18 @@ impl Component for ProjectStatusComponent {
             element.set_attribute("terminal", terminal.as_str());
             element.set_attribute("custom", custom_json.as_str());
         });
+
+        spawn_local(async move {
+            let branch = load_branch(project.as_str()).await;
+            let element = get_element_by_id(&id);
+
+            if element.is_none() {
+                return;
+            }
+
+            let element = element.unwrap();
+            let _ = element.set_attribute("branch", branch.as_str());
+        });
     }
 
     fn disconnected(&self) {
@@ -73,7 +89,7 @@ impl Component for ProjectStatusComponent {
     }
 
     fn attribute_changed(&self, name: &str, _old_value: &str, _new_value: &str) {
-        if name != "project" && name != "custom" {
+        if name != "project" && name != "custom" && name != "branch" {
             return;
         }
 
@@ -95,9 +111,12 @@ impl ProjectStatusComponent {
 
         let project: String = self.get_attribute("project").unwrap_or_default();
         let custom_actions: Vec<CustomCommand> = self.get_attribute("custom").unwrap_or_default();
+        let branch: String = self
+            .get_attribute("branch")
+            .unwrap_or_else(|| "unknown".to_string());
 
         let content = html! {{
-            <p>$project branch <build-status project="$project"></build-status></p>
+            <p>$project branch $branch</p>
             <div class="project-actions">
                 <button class="project-action-button" onclick="runAll('$project')">Run</button>
 
@@ -207,6 +226,12 @@ async fn run_all(project: String) {
     };
 }
 
+#[derive(Deserialize)]
+struct BranchResponse {
+    ok: bool,
+    branch: String,
+}
+
 async fn load_settings(project: &str) -> Option<BuildCommands> {
     let endpoint = format!("/load-settings?project={}", project);
 
@@ -231,6 +256,35 @@ async fn load_settings(project: &str) -> Option<BuildCommands> {
         Err(_) => {
             log!("#save-status", "Failed to parse settings response.");
             return None;
+        }
+    }
+}
+
+async fn load_branch(project: &str) -> String {
+    let endpoint = format!("/branch?project={}", project);
+
+    let response = match Request::get(endpoint.as_str()).send().await {
+        Ok(response) => response,
+        Err(_) => {
+            log!("Failed to load branch.");
+            return "unknown".to_string();
+        }
+    };
+
+    let body = match response.text().await {
+        Ok(body) => body,
+        Err(_) => {
+            log!("Failed to read branch response.");
+            return "unknown".to_string();
+        }
+    };
+
+    match serde_json::from_str::<BranchResponse>(body.as_str()) {
+        Ok(branch_response) if branch_response.ok => branch_response.branch,
+        Ok(_) => "unknown".to_string(),
+        Err(_) => {
+            log!("Failed to parse branch response.");
+            "unknown".to_string()
         }
     }
 }

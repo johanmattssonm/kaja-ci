@@ -4,6 +4,7 @@ use std::io;
 
 mod abort;
 mod app;
+mod branch;
 mod build;
 mod clean;
 mod clone;
@@ -36,6 +37,7 @@ async fn main() -> std::io::Result<()> {
             .service(index::index)
             .service(index::clone_handler)
             .service(index::compact_clone_handler)
+            .service(branch::branch)
             .service(build::build)
             .service(fetch::fetch)
             .service(settings::settings)

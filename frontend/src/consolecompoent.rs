@@ -10,7 +10,7 @@ use gloo_net::{
 use kaja_web::prelude::*;
 use serde::Deserialize;
 use wasm_bindgen::{JsCast, prelude::Closure};
-use wasm_bindgen_futures::spawn_local;
+use wasm_bindgen_futures::{JsFuture, spawn_local};
 
 #[component("console-component")]
 struct Console {
@@ -77,6 +77,7 @@ impl Component for ConsoleComponent {
                 return;
             }
 
+            setup_log_output_shortcuts(&id);
             load_latest_raw_log(id, project, file);
             return;
         }
@@ -781,6 +782,15 @@ fn single_char_key(key: &str) -> Option<char> {
 fn key_to_terminal_input(event: &web_sys::KeyboardEvent) -> Option<String> {
     let key = event.key();
 
+    if event.ctrl_key() && event.shift_key() {
+        if let Some(ch) = single_char_key(&key) {
+            let ch = ch.to_ascii_lowercase();
+            if ch == 'c' || ch == 'v' {
+                return None;
+            }
+        }
+    }
+
     if event.ctrl_key() {
         if let Some(ch) = single_char_key(&key) {
             let ch = ch.to_ascii_lowercase();
@@ -836,6 +846,101 @@ fn send_stdin(stdin: String, input_tx: &mpsc::UnboundedSender<String>) {
     }
 }
 
+fn handle_copy_shortcut(event: &web_sys::KeyboardEvent) -> bool {
+    if !(event.ctrl_key() && event.shift_key()) {
+        return false;
+    }
+
+    if !event.key().eq_ignore_ascii_case("c") {
+        return false;
+    }
+
+    event.prevent_default();
+    let _ = js_sys::eval("document.execCommand('copy')");
+    true
+}
+
+fn handle_terminal_copy_paste_shortcuts(
+    event: &web_sys::KeyboardEvent,
+    input_tx: &mpsc::UnboundedSender<String>,
+) -> bool {
+    if handle_copy_shortcut(event) {
+        return true;
+    }
+
+    if !(event.ctrl_key() && event.shift_key()) {
+        return false;
+    }
+
+    let key = event.key();
+    let is_paste = key.eq_ignore_ascii_case("v");
+
+    if is_paste {
+        event.prevent_default();
+
+        let output_tx = input_tx.clone();
+        spawn_local(async move {
+            let Ok(value) = js_sys::eval(
+                "navigator.clipboard && navigator.clipboard.readText ? navigator.clipboard.readText() : null",
+            ) else {
+                return;
+            };
+
+            if value.is_null() || value.is_undefined() {
+                return;
+            }
+
+            let Ok(promise) = value.dyn_into::<js_sys::Promise>() else {
+                return;
+            };
+
+            let Ok(clipboard_text) = JsFuture::from(promise).await else {
+                return;
+            };
+
+            let Some(stdin) = clipboard_text.as_string() else {
+                return;
+            };
+
+            if stdin.is_empty() {
+                return;
+            }
+
+            send_stdin(stdin, &output_tx);
+        });
+
+        return true;
+    }
+
+    false
+}
+
+fn setup_log_output_shortcuts(id: &str) {
+    let output_id = format!("{}-output", id);
+
+    let output = match get_element_by_id(&output_id) {
+        Some(output) => output,
+        None => {
+            log!("No output box for log view component.");
+            return;
+        }
+    };
+
+    let output_keydown = Closure::<dyn FnMut(_)>::new(move |event: web_sys::KeyboardEvent| {
+        let _ = handle_copy_shortcut(&event);
+    });
+
+    if output
+        .add_event_listener_with_callback("keydown", output_keydown.as_ref().unchecked_ref())
+        .is_err()
+    {
+        log!("Failed to register log output keydown handler");
+        return;
+    }
+
+    output_keydown.forget();
+}
+
 fn setup_stdin_handler(id: &str, input_tx: mpsc::UnboundedSender<String>) {
     let output_id = format!("{}-output", id);
 
@@ -849,6 +954,10 @@ fn setup_stdin_handler(id: &str, input_tx: mpsc::UnboundedSender<String>) {
 
     let output_tx = input_tx.clone();
     let output_keydown = Closure::<dyn FnMut(_)>::new(move |event: web_sys::KeyboardEvent| {
+        if handle_terminal_copy_paste_shortcuts(&event, &output_tx) {
+            return;
+        }
+
         let Some(stdin) = key_to_terminal_input(&event) else {
             return;
         };

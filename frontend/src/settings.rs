@@ -74,17 +74,9 @@ impl SettingsComponent {
             <p>
                 <div class="setting-row-label">
                     <input id="default-git" type="checkbox" class="setting-default-checkbox" />
-                    <label for="default-git">Git command</label>
+                    <label for="default-git">Git fetch command</label>
                 </div>
                 <input id="git" name="git" type="text" value="$(git)" />
-            </p>
-
-            <p>
-                <div class="setting-row-label">
-                    <input id="default-clone" type="checkbox" class="setting-default-checkbox" />
-                    <label for="default-clone">Clone command</label>
-                </div>
-                <input id="clone" name="clone" type="text" value="$(clone)" />
             </p>
 
             <p>
