@@ -5,7 +5,14 @@ use crate::runner::{RunGetParams, RunTaskError, start_run_task};
 
 #[actix_web::get("/run")]
 pub async fn run(params: web::Query<RunGetParams>) -> impl Responder {
-    match start_run_task(params.project.clone(), params.task_key.clone(), None).await {
+    match start_run_task(
+        params.project.clone(),
+        params.task_key.clone(),
+        params.command.clone(),
+        None,
+    )
+    .await
+    {
         Ok(task_key) => HttpResponse::Ok().json(serde_json::json!({
             "ok": true,
             "task": task_key

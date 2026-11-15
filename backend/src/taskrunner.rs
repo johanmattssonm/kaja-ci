@@ -193,6 +193,7 @@ fn task_href(action: &str, project: &str) -> String {
     match action {
         "git" | "fetch" => format!("/fetch?project={project}"),
         "build" => format!("/build?project={project}"),
+        "clone" => format!("/clone?project={project}"),
         "test" => format!("/test?project={project}"),
         "release" => format!("/release?project={project}"),
         "clean" => format!("/clean?project={project}"),
@@ -211,6 +212,7 @@ async fn run_task_from_run_all(
     let task_result = start_run_task(
         project.to_string(),
         task_key.to_string(),
+        None,
         run_all_raw_file_name,
     )
     .await;

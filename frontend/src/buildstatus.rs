@@ -46,6 +46,7 @@ struct LatestLogResponse {
 struct LatestLogMetadata {
     status: String,
     finished_at: Option<String>,
+    raw_file: String,
 }
 
 #[component("build-status")]
@@ -362,10 +363,22 @@ fn load_latest_build_status(id: String, project: String) {
             }
         };
 
-        let href = format!(
-            "/log?project={}",
-            js_sys::encode_uri_component(project.as_str())
-        );
+        let raw_file_name = metadata
+            .raw_file
+            .rsplit('/')
+            .next()
+            .and_then(|value| value.rsplit('\\').next())
+            .unwrap_or(metadata.raw_file.as_str());
+
+        let href = if raw_file_name.ends_with(".raw") {
+            format!("/log?file={}", js_sys::encode_uri_component(raw_file_name))
+        } else {
+            format!(
+                "/log?project={}",
+                js_sys::encode_uri_component(project.as_str())
+            )
+        };
+
         render_status(id.as_str(), href.as_str(), label.as_str());
     });
 }

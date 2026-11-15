@@ -350,12 +350,16 @@ impl AppData {
     }
 }
 
-fn history_base_dir() -> PathBuf {
+pub fn log_base_dir() -> PathBuf {
     if let Ok(home) = std::env::var("HOME") {
-        return PathBuf::from(home).join(".kaja-ci");
+        return PathBuf::from(home).join(".kaja-ci").join("logs");
     }
 
-    PathBuf::from(".kaja-ci")
+    PathBuf::from(".kaja-ci").join("logs")
+}
+
+pub fn ensure_log_base_dir_exists() -> std::io::Result<()> {
+    fs::create_dir_all(log_base_dir().as_path())
 }
 
 fn create_history_files(
@@ -364,7 +368,7 @@ fn create_history_files(
     project: &str,
     raw_history_file_name: Option<String>,
 ) -> Option<TaskHistoryFiles> {
-    let base_dir = history_base_dir();
+    let base_dir = log_base_dir();
 
     if let Err(err) = fs::create_dir_all(base_dir.as_path()) {
         println!(

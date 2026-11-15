@@ -12,6 +12,8 @@ struct Settings {
     #[attribute]
     pub git: String,
     #[attribute]
+    pub clone: String,
+    #[attribute]
     pub build: String,
     #[attribute]
     pub test: String,
@@ -54,6 +56,7 @@ impl SettingsComponent {
 
         let project: String = self.get_attribute("project").unwrap_or_default();
         let git: String = self.get_attribute("git").unwrap_or_default();
+        let clone: String = self.get_attribute("clone").unwrap_or_default();
         let build: String = self.get_attribute("build").unwrap_or_default();
         let test: String = self.get_attribute("test").unwrap_or_default();
         let release: String = self.get_attribute("release").unwrap_or_default();
@@ -74,6 +77,14 @@ impl SettingsComponent {
                     <label for="default-git">Git command</label>
                 </div>
                 <input id="git" name="git" type="text" value="$(git)" />
+            </p>
+
+            <p>
+                <div class="setting-row-label">
+                    <input id="default-clone" type="checkbox" class="setting-default-checkbox" />
+                    <label for="default-clone">Clone command</label>
+                </div>
+                <input id="clone" name="clone" type="text" value="$(clone)" />
             </p>
 
             <p>
@@ -214,6 +225,7 @@ async fn save_settings(id: String) {
     };
 
     let git: String = try_get_value("#git");
+    let clone: String = try_get_value("#clone");
     let build: String = try_get_value("#build");
     let test: String = try_get_value("#test");
     let release: String = try_get_value("#release");
@@ -223,6 +235,10 @@ async fn save_settings(id: String) {
 
     if try_is_checked("#default-git") && !git.trim().is_empty() {
         tasks.push("git".to_string());
+    }
+
+    if try_is_checked("#default-clone") && !clone.trim().is_empty() {
+        tasks.push("clone".to_string());
     }
 
     if try_is_checked("#default-build") && !build.trim().is_empty() {
@@ -283,6 +299,7 @@ async fn save_settings(id: String) {
 
     let settings = BuildCommands {
         git: Some(git.clone()),
+        clone: Some(clone.clone()),
         build: Some(build.clone()),
         test: Some(test.clone()),
         release: Some(release.clone()),
@@ -308,6 +325,7 @@ async fn save_settings(id: String) {
             let tasks_json = serde_json::to_string(&tasks).unwrap_or_else(|_| "[]".to_string());
 
             let _ = element.set_attribute("git", git.as_str());
+            let _ = element.set_attribute("clone", clone.as_str());
             let _ = element.set_attribute("build", build.as_str());
             let _ = element.set_attribute("test", test.as_str());
             let _ = element.set_attribute("release", release.as_str());

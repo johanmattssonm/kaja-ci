@@ -22,6 +22,7 @@ const TASK_IDLE_CHECK_INTERVAL_SECONDS: u64 = 30;
 mod rest;
 
 use crate::app::APP_DATA;
+use crate::clone::{clone_target_dir_from_command, ensure_project_in_settings};
 use rest::{Action, ActionResponse, BuildCommands};
 
 pub const BUILD_DIR: &str = "/home/johan/Downloads/resting-chair";
@@ -36,6 +37,7 @@ pub struct ProjectGetParams {
 pub struct RunGetParams {
     pub project: String,
     pub task_key: String,
+    pub command: Option<String>,
 }
 
 #[derive(Debug)]
@@ -1244,6 +1246,10 @@ async fn process_std_in(action: Action, stdin_state: Arc<Mutex<BuildInputState>>
 fn command_to_executable(action: &Action) -> Option<CommandBuilder> {
     let folder = action.folder.as_deref()?;
 
+    if action.command.is_some() {
+        return parse_command(action.command.clone(), folder).ok();
+    }
+
     let mut project_dir = PathBuf::from(folder);
     project_dir.push("ci.json");
 
@@ -1264,7 +1270,8 @@ fn command_to_executable(action: &Action) -> Option<CommandBuilder> {
     };
 
     match action.action.as_str() {
-        "build" => parse_command(config_commands.build, folder).ok(),
+        "build" => parse_command(config_commands.build.clone(), folder).ok(),
+        "clone" => parse_command(config_commands.clone, folder).ok(),
         "git" => parse_command(config_commands.git, folder).ok(),
         "test" => parse_command(config_commands.test, folder).ok(),
         "release" => parse_command(config_commands.release, folder).ok(),
@@ -1418,11 +1425,18 @@ fn spawn_idle_timeout_watchdog(
 pub async fn start_run_task(
     project_folder: String,
     run_task_key: String,
+    command: Option<String>,
     raw_history_file_name: Option<String>,
 ) -> Result<String, RunTaskError> {
     let action_name = run_task_key;
 
-    start_detached_action(action_name.as_str(), project_folder, raw_history_file_name).await
+    start_detached_action(
+        action_name.as_str(),
+        project_folder,
+        command,
+        raw_history_file_name,
+    )
+    .await
 }
 
 async fn check_requested_task_state(
@@ -1450,6 +1464,7 @@ async fn check_requested_task_state(
 async fn start_detached_action(
     action_name: &str,
     project_folder: String,
+    command: Option<String>,
     raw_history_file_name: Option<String>,
 ) -> Result<String, RunTaskError> {
     if !folder_exists(project_folder.as_str()) {
@@ -1468,7 +1483,7 @@ async fn start_detached_action(
 
     let action = Action {
         action: action_name.clone(),
-        command: None,
+        command,
         folder: Some(project_folder.clone()),
         stdin: None,
         task_key: None,
@@ -1636,6 +1651,9 @@ async fn start_detached_action(
     let task_key_exit = task_key.clone();
     let stdout_tx_exit = stdout_tx.clone();
     let child_exit = child.clone();
+    let action_name_exit = action_name.clone();
+    let project_folder_exit = project_folder.clone();
+    let command_exit = action.command.clone();
 
     std::thread::spawn(move || {
         let status = wait_for_exit(child_exit);
@@ -1646,6 +1664,33 @@ async fn start_detached_action(
             broadcast_task_stdout(task_key_exit.as_str(), &stdout_tx_exit, out);
 
             if exit_code == 0 {
+                if action_name_exit == "clone"
+                    && let Some(clone_command) = command_exit.as_deref()
+                {
+                    let project_folder_path = PathBuf::from(project_folder_exit.as_str());
+                    match clone_target_dir_from_command(
+                        clone_command,
+                        project_folder_path.as_path(),
+                    ) {
+                        Ok(target_dir) => {
+                            if let Err(err) = ensure_project_in_settings(target_dir.as_path()) {
+                                broadcast_task_stdout(
+                                    task_key_exit.as_str(),
+                                    &stdout_tx_exit,
+                                    format!("Failed to save project in settings: {err}\n"),
+                                );
+                            }
+                        }
+                        Err(err) => {
+                            broadcast_task_stdout(
+                                task_key_exit.as_str(),
+                                &stdout_tx_exit,
+                                format!("Failed to resolve clone target directory: {err}\n"),
+                            );
+                        }
+                    }
+                }
+
                 broadcast_task_status(&stdout_tx_exit, "SUCCESS");
                 true
             } else {

@@ -32,6 +32,12 @@ struct Console {
     #[attribute]
     has_connected: bool,
 
+    #[attribute]
+    command: String,
+
+    #[attribute]
+    auto_start: bool,
+
     // internal render state for terminal, not an attribute
     ansi_render_state: Option<color::AnsiRenderState>,
 }
@@ -51,11 +57,15 @@ impl Component for ConsoleComponent {
             ensure_abort_on_exit_handlers();
         }
 
-        if action.is_empty() || project.is_empty() {
+        if action.is_empty() {
             return;
         }
 
         if action == "terminal" {
+            if project.is_empty() {
+                return;
+            }
+
             spawn_local(async move {
                 connect_terminal(project).await;
             });
@@ -63,7 +73,30 @@ impl Component for ConsoleComponent {
         }
 
         if action == "log" {
+            if project.is_empty() && file.is_empty() {
+                return;
+            }
+
             load_latest_raw_log(id, project, file);
+            return;
+        }
+
+        if project.is_empty() {
+            return;
+        }
+
+        let command: String = self.get_attribute("command").unwrap_or_default();
+        let auto_start: bool = self.get_attribute("auto_start").unwrap_or(false);
+
+        if auto_start && !command.is_empty() {
+            spawn_local(async move {
+                start_and_connect_console_view_with_command(
+                    action.as_str(),
+                    project.as_str(),
+                    command.as_str(),
+                )
+                .await;
+            });
             return;
         }
 
@@ -406,8 +439,17 @@ struct RunTaskResponse {
     message: Option<String>,
 }
 
-async fn start_task(project: &str, action: &str) -> Option<String> {
-    let endpoint = format!("/run?project={}&task_key={}", project, action);
+async fn start_task(project: &str, action: &str, command: Option<&str>) -> Option<String> {
+    let mut endpoint = format!(
+        "/run?project={}&task_key={}",
+        url_encode(project),
+        url_encode(action)
+    );
+
+    if let Some(command) = command.filter(|value| !value.is_empty()) {
+        endpoint.push_str("&command=");
+        endpoint.push_str(url_encode(command).as_str());
+    }
 
     let response = match Request::get(endpoint.as_str()).send().await {
         Ok(response) => response,
@@ -480,6 +522,7 @@ fn task_href(task_key: &str, project: &str) -> String {
     match action {
         "git" | "fetch" => format!("/fetch?project={project}"),
         "build" => format!("/build?project={project}"),
+        "clone" => format!("/clone?project={project}"),
         "test" => format!("/test?project={project}"),
         "release" => format!("/release?project={project}"),
         "clean" => format!("/clean?project={project}"),
@@ -506,7 +549,7 @@ async fn connect_terminal(project: String) {
         }
     }
 
-    let Some(task_key) = start_task(project.as_str(), "terminal").await else {
+    let Some(task_key) = start_task(project.as_str(), "terminal", None).await else {
         log!("Failed to start terminal.");
         return;
     };
@@ -540,6 +583,16 @@ async fn connect_terminal(project: String) {
 #[callback("startTask")]
 async fn start_task_from_nav(project: String, action: String) {
     start_and_connect_console_view(action.as_str(), project.as_str()).await;
+}
+
+#[callback("startTaskWithCommand")]
+async fn start_task_with_command_from_nav(project: String, action: String, command: String) {
+    start_and_connect_console_view_with_command(
+        action.as_str(),
+        project.as_str(),
+        command.as_str(),
+    )
+    .await;
 }
 
 fn build_task_key(project: &str, action: &str) -> String {
@@ -609,7 +662,12 @@ async fn ensure_builder_task_connected(action: &str, project: &str) {
 }
 
 async fn start_and_connect_console_view(action: &str, project: &str) {
-    let Some(task_key) = start_task(project, action).await else {
+    start_and_connect_console_view_with_command(action, project, "").await;
+}
+
+async fn start_and_connect_console_view_with_command(action: &str, project: &str, command: &str) {
+    let command = (!command.is_empty()).then_some(command);
+    let Some(task_key) = start_task(project, action, command).await else {
         return;
     };
 

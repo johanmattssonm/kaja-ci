@@ -202,6 +202,40 @@ a:focus-visible {
     text-underline-offset: 2px;
 }
 
+table {
+    width: 100%;
+    border-collapse: collapse;
+    border: 1px solid #3b3b3b;
+    border-radius: 8px;
+    overflow: hidden;
+    background: #171717;
+}
+
+thead {
+    background: #242424;
+}
+
+th,
+td {
+    padding: 10px 12px;
+    text-align: left;
+    border-bottom: 1px solid #303030;
+    vertical-align: top;
+}
+
+th {
+    font-weight: 700;
+    color: #f1f1f1;
+}
+
+tbody tr:hover {
+    background: #1f1f1f;
+}
+
+tbody tr:last-child td {
+    border-bottom: none;
+}
+
 .terminal-output {
     white-space: pre;
     tab-size: 8;

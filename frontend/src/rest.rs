@@ -27,6 +27,7 @@ pub struct CustomCommand {
 #[derive(Debug, Default, Serialize, Deserialize)]
 pub struct BuildCommands {
     pub git: Option<String>,
+    pub clone: Option<String>,
     pub build: Option<String>,
     pub test: Option<String>,
     pub release: Option<String>,

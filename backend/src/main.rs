@@ -1,10 +1,12 @@
 use actix_files as fs;
 use actix_web::{App, HttpServer, web};
+use std::io;
 
 mod abort;
 mod app;
 mod build;
 mod clean;
+mod clone;
 mod custom;
 mod fetch;
 mod index;
@@ -13,6 +15,7 @@ mod release;
 mod run;
 mod runner;
 mod settings;
+mod settingsfile;
 mod status;
 mod taskrunner;
 mod terminal;
@@ -20,6 +23,9 @@ mod test;
 
 #[actix_web::main]
 async fn main() -> std::io::Result<()> {
+    settingsfile::ensure_kaja_ci_dirs_exist().map_err(io::Error::other)?;
+    app::ensure_log_base_dir_exists()?;
+
     println!("Starting Kaja CI build server");
     println!("WebSocket server: ws://127.0.0.1:2003/runner");
     println!("Frontend: http://127.0.0.1:2003/");
@@ -28,6 +34,8 @@ async fn main() -> std::io::Result<()> {
         App::new()
             .service(fs::Files::new("/pkg", "../frontend/pkg"))
             .service(index::index)
+            .service(index::clone_handler)
+            .service(index::compact_clone_handler)
             .service(build::build)
             .service(fetch::fetch)
             .service(settings::settings)

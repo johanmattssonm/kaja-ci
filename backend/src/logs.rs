@@ -5,9 +5,9 @@ use kaja_html_macro::html;
 use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
 use std::ffi::OsStr;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
-use crate::app::TaskHistoryMetadata;
+use crate::app::{TaskHistoryMetadata, log_base_dir};
 
 #[derive(Deserialize)]
 pub struct LogParams {
@@ -79,7 +79,7 @@ pub async fn latest_log(params: web::Query<LogParams>) -> impl Responder {
 #[actix_web::get("/log/raw")]
 pub async fn latest_log_raw(params: web::Query<LogParams>) -> impl Responder {
     let raw_path = if let Some(file_name) = safe_history_file_name(params.file.as_deref()) {
-        history_base_dir().join(file_name)
+log_base_dir().join(file_name)
     } else {
         let Some(project) = params.project.as_deref() else {
             return HttpResponse::BadRequest()
@@ -109,6 +109,7 @@ pub async fn latest_log_raw(params: web::Query<LogParams>) -> impl Responder {
 #[actix_web::get("/history")]
 pub async fn history_page(params: web::Query<HistoryParams>) -> impl Responder {
     let entries = metadata_for_project(params.project.as_deref());
+    let rows = history_rows(entries.as_slice());
 
     let content = html! {{
         <!doctype html>
@@ -135,54 +136,8 @@ pub async fn history_page(params: web::Query<HistoryParams>) -> impl Responder {
                             }
                         </rust>
                     </p>
-                    <div>
-                        <rust>
-                            let mut seen_raw_files = HashSet::new();
 
-                            for item in entries {
-                                let raw_name = item
-                                    .raw_file
-                                    .rsplit('/')
-                                    .next()
-                                    .unwrap_or(item.raw_file.as_str());
-
-                                if !seen_raw_files.insert(raw_name.to_string()) {
-                                    continue;
-                                }
-
-                                let href = format!("/log?file={}", raw_name);
-
-                                let timestamp = item
-                                    .finished_at
-                                    .as_deref()
-                                    .or(Some(item.started_at.as_str()))
-                                    .map(format_local_time)
-                                    .unwrap_or_else(|| "running".to_string());
-
-                                let status_class = if item.status == "success" {
-                                    "terminal-fg-green"
-                                } else if item.status == "failed" {
-                                    "terminal-fg-red"
-                                } else {
-                                    ""
-                                };
-
-                                <markup>
-                                    <div>
-                                        <a href="$href">$(raw_name)</a>
-                                        <span> - $(timestamp)</span>
-                                        <rust>
-                                            if !status_class.is_empty() {
-                                                <markup>
-                                                    <span class="$status_class"> ($(item.status.clone()))</span>
-                                                </markup>
-                                            }
-                                        </rust>
-                                    </div>
-                                </markup>
-                            }
-                        </rust>
-                    </div>
+                    <include history_table(rows.as_slice()) />
                 </main>
             </body>
         </html>
@@ -191,6 +146,96 @@ pub async fn history_page(params: web::Query<HistoryParams>) -> impl Responder {
     HttpResponse::Ok()
         .content_type(ContentType::html())
         .body(content)
+}
+
+fn history_table(rows: &[HistoryRow]) -> String {
+    html! {{
+        <table>
+            <thead>
+                <tr>
+                    <th>Timestamp</th>
+                    <th>Project</th>
+                    <th>Status</th>
+                    <th>Log file</th>
+                </tr>
+            </thead>
+            <tbody>
+                <rust>
+                    for row in rows {
+                        let status_class = row.status_class.as_str();
+
+                        <markup>
+                            <tr>
+                                <td>$(row.timestamp)</td>
+                                <td>$(row.project)</td>
+                                <td>
+                                    <rust>
+                                        if status_class.is_empty() {
+                                            <markup>$(row.status)</markup>
+                                        } else {
+                                            <markup><span class="$status_class">$(row.status)</span></markup>
+                                        }
+                                    </rust>
+                                </td>
+                                <td><a href="$(row.href)">$(row.raw_name)</a></td>
+                            </tr>
+                        </markup>
+                    }
+                </rust>
+            </tbody>
+        </table>
+    }}
+}
+
+struct HistoryRow {
+    timestamp: String,
+    project: String,
+    status: String,
+    status_class: String,
+    href: String,
+    raw_name: String,
+}
+
+fn history_rows(entries: &[TaskHistoryMetadata]) -> Vec<HistoryRow> {
+    let mut seen_raw_files = HashSet::new();
+    let mut rows = Vec::new();
+
+    for item in entries {
+        let raw_name = raw_file_name(item.raw_file.as_str()).to_string();
+
+        if !seen_raw_files.insert(raw_name.clone()) {
+            continue;
+        }
+
+        let href = format!("/log?file={}", encode_query_component(raw_name.as_str()));
+
+        let timestamp = item
+            .finished_at
+            .as_deref()
+            .or(Some(item.started_at.as_str()))
+            .map(format_local_time)
+            .unwrap_or_else(|| "running".to_string());
+
+        let status_class = if item.status == "success" {
+            "terminal-fg-green"
+        } else if item.status == "failed" || item.status == "fail" {
+            "terminal-fg-red"
+        } else {
+            ""
+        }
+        .to_string();
+
+        rows.push(HistoryRow {
+            timestamp,
+            project: item.project.clone(),
+            status: item.status.clone(),
+            status_class,
+            href,
+            raw_name,
+        });
+    }
+
+    rows
 }
 
 pub fn latest_metadata_for_project(project: &str) -> Option<TaskHistoryMetadata> {
@@ -207,17 +252,14 @@ fn metadata_for_project(project: Option<&str>) -> Vec<TaskHistoryMetadata> {
     records
 }
 
-fn metadata_for_raw_file(raw_file_name: &str) -> Option<TaskHistoryMetadata> {
-    all_history_metadata().into_iter().find(|metadata| {
-        PathBuf::from(metadata.raw_file.as_str())
-            .file_name()
-            .map(|name| name == OsStr::new(raw_file_name))
-            .unwrap_or(false)
-    })
+fn metadata_for_raw_file(target_raw_file_name: &str) -> Option<TaskHistoryMetadata> {
+    all_history_metadata()
+        .into_iter()
+        .find(|metadata| raw_file_name(metadata.raw_file.as_str()) == target_raw_file_name)
 }
 
 fn all_history_metadata() -> Vec<TaskHistoryMetadata> {
-    let base_dir = history_base_dir();
+    let base_dir = log_base_dir();
     let mut entries = match std::fs::read_dir(base_dir) {
         Ok(entries) => entries.flatten().collect::<Vec<_>>(),
         Err(_) => return Vec::new(),
@@ -249,8 +291,23 @@ fn all_history_metadata() -> Vec<TaskHistoryMetadata> {
     records
 }
 
+fn encode_query_component(value: &str) -> String {
+    let mut output = String::with_capacity(value.len());
+
+    for byte in value.bytes() {
+        if byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_' | b'.' | b'~') {
+            output.push(byte as char);
+        } else {
+            output.push('%');
+            output.push_str(format!("{:02X}", byte).as_str());
+        }
+    }
+
+    output
+}
+
 fn safe_history_file_name(input: Option<&str>) -> Option<String> {
-    let candidate = input?.trim();
+    let candidate = input?.trim().replace(' ', "+");
 
     if candidate.is_empty() || candidate.contains('/') || candidate.contains('\\') {
         return None;
@@ -260,15 +317,17 @@ fn safe_history_file_name(input: Option<&str>) -> Option<String> {
         return None;
     }
 
-    Some(candidate.to_string())
+    Some(candidate)
 }
 
-fn history_base_dir() -> PathBuf {
-    if let Ok(home) = std::env::var("HOME") {
-        return PathBuf::from(home).join(".kaja-ci");
-    }
 
-    PathBuf::from(".kaja-ci")
+fn raw_file_name(raw_file: &str) -> &str {
+    Path::new(raw_file)
+        .file_name()
+        .and_then(|name| name.to_str())
+        .or_else(|| raw_file.rsplit('/').next())
+        .or_else(|| raw_file.rsplit('\\').next())
+        .unwrap_or(raw_file)
 }
 
 fn format_local_time(input: &str) -> String {

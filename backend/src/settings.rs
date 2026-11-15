@@ -52,6 +52,7 @@ pub async fn settings(params: web::Query<ProjectGetParams>) -> impl Responder {
                     <project-settings
                         project="$(params.project)"
                         git="$(settings.git.unwrap_or_default())"
+                        clone="$(settings.clone.unwrap_or_default())"
                         build="$(settings.build.unwrap_or_default())"
                         test="$(settings.test.unwrap_or_default())"
                         release="$(settings.release.unwrap_or_default())"
