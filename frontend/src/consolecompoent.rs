@@ -825,6 +825,26 @@ fn key_to_terminal_input(event: &web_sys::KeyboardEvent) -> Option<String> {
     }
 }
 
+fn normalize_pasted_terminal_input(input: &str) -> String {
+    let mut out = String::with_capacity(input.len());
+    let mut chars = input.chars().peekable();
+
+    while let Some(ch) = chars.next() {
+        match ch {
+            '\r' => {
+                if matches!(chars.peek(), Some('\n')) {
+                    let _ = chars.next();
+                }
+                out.push('\r');
+            }
+            '\n' => out.push('\r'),
+            _ => out.push(ch),
+        }
+    }
+
+    out
+}
+
 fn send_stdin(stdin: String, input_tx: &mpsc::UnboundedSender<String>) {
     let action = Action {
         action: "STDIN".to_string(),
@@ -901,6 +921,8 @@ fn handle_terminal_copy_paste_shortcuts(
             let Some(stdin) = clipboard_text.as_string() else {
                 return;
             };
+
+            let stdin = normalize_pasted_terminal_input(stdin.as_str());
 
             if stdin.is_empty() {
                 return;
@@ -1084,7 +1106,7 @@ fn handle_status(component_id: &str, line: ActionResponse) {
 
 #[cfg(test)]
 mod tests {
-    use super::single_char_key;
+    use super::{normalize_pasted_terminal_input, single_char_key};
 
     #[test]
     fn single_char_key_accepts_ascii_character() {
@@ -1102,5 +1124,23 @@ mod tests {
     fn single_char_key_rejects_longer_keys() {
         assert_eq!(single_char_key("Enter"), None);
         assert_eq!(single_char_key("ab"), None);
+    }
+
+    #[test]
+    fn normalize_pasted_terminal_input_converts_lf_to_cr() {
+        assert_eq!(normalize_pasted_terminal_input("a\nb\n"), "a\rb\r");
+    }
+
+    #[test]
+    fn normalize_pasted_terminal_input_converts_crlf_to_single_cr() {
+        assert_eq!(normalize_pasted_terminal_input("a\r\nb\r\n"), "a\rb\r");
+    }
+
+    #[test]
+    fn normalize_pasted_terminal_input_preserves_non_newline_text() {
+        assert_eq!(
+            normalize_pasted_terminal_input("hello\tworld"),
+            "hello\tworld"
+        );
     }
 }
