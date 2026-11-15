@@ -197,7 +197,6 @@ impl ProjectStatusComponent {
                 <button class="project-action-button" onclick="goTo('/settings?project=$project')">Settings</button>
                 <button class="project-action-button" onclick="goTo('/history?project=$project')">History</button>
             </div>
-            </div>
         }};
 
         element.set_inner_html(content.as_str());

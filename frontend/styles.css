@@ -12,6 +12,11 @@ body {
     line-height: 1.45;
 }
 
+project-status {
+    display: block;
+    margin-bottom: 2em;
+}
+
 .top-bar {
     width: min(1197px, 100%);
     margin: 0 auto 16px;

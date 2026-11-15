@@ -36,7 +36,6 @@ pub async fn index() -> impl Responder {
                         }
                     </rust>
 
-                    <br>
                     <form action="/clone" method="get">
                         <input type="text" name="clone-command" placeholder="git clone https://github.com/org/repo.git" />
                         <button type="submit">Clone repository</button>
