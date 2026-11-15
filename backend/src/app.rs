@@ -9,6 +9,7 @@ use std::sync::LazyLock;
 use std::sync::{Arc, RwLock as StdRwLock};
 use tokio::sync::{RwLock, broadcast, mpsc};
 
+use crate::branch::current_branch;
 use crate::taskrunner::send_task_status;
 
 // The app can have one builder running and many terminals attached.
@@ -51,6 +52,8 @@ pub struct TaskHistoryMetadata {
     pub started_at: String,
     pub finished_at: Option<String>,
     pub raw_file: String,
+    #[serde(default)]
+    pub branch: String,
 }
 
 #[derive(Clone, Debug)]
@@ -61,6 +64,7 @@ pub struct TaskHistoryFiles {
     pub project: String,
     pub action: String,
     pub started_at: String,
+    pub branch: String,
 }
 
 impl AppData {
@@ -395,6 +399,7 @@ fn create_history_files(
         project: project.to_string(),
         action: action.to_string(),
         started_at,
+        branch: current_branch(project).unwrap_or_default(),
     };
 
     let metadata = TaskHistoryMetadata {
@@ -406,6 +411,7 @@ fn create_history_files(
         started_at: files.started_at.clone(),
         finished_at: None,
         raw_file: files.raw_path.to_string_lossy().to_string(),
+        branch: files.branch.clone(),
     };
 
     write_metadata(files.meta_path.as_path(), &metadata);
@@ -467,6 +473,7 @@ fn write_task_history_completion(
         started_at: files.started_at.clone(),
         finished_at: Some(Local::now().to_rfc3339_opts(SecondsFormat::Secs, false)),
         raw_file: files.raw_path.to_string_lossy().to_string(),
+        branch: files.branch.clone(),
     };
 
     write_metadata(files.meta_path.as_path(), &metadata);

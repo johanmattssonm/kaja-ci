@@ -1,13 +1,14 @@
 use actix_web::http::header::ContentType;
 use actix_web::{Error, HttpRequest, HttpResponse, Responder, web};
 use actix_ws::{Message, handle};
-use chrono::{Local, SecondsFormat};
+use chrono::Local;
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 use std::sync::{OnceLock, RwLock as StdRwLock};
 use tokio::sync::broadcast;
 
 use crate::app::APP_DATA;
+use crate::branch::current_branch;
 use crate::runner::{RunTaskError, start_run_task};
 
 #[derive(Deserialize)]
@@ -24,10 +25,12 @@ struct BuildCommands {
 pub struct TaskRunningStatus {
     pub ok: bool,
     pub running: bool,
+    pub project: String,
     pub task_key: String,
     pub time: String,
     pub href: String,
     pub message: Option<String>,
+    pub branch: String,
 }
 
 static TASK_STATUS_TX: OnceLock<broadcast::Sender<String>> = OnceLock::new();
@@ -66,13 +69,21 @@ pub fn send_task_status_with_running_and_message(
     running: bool,
     message: Option<&str>,
 ) {
+    let project_value = project.unwrap_or("").to_string();
+
     let status = TaskRunningStatus {
         ok,
         running,
+        project: project_value.clone(),
         task_key: task_key.to_string(),
         time: now_time_string(),
-        href: task_href(action.unwrap_or(""), project.unwrap_or("")),
+        href: task_href(action.unwrap_or(""), project_value.as_str()),
         message: message.map(|value| value.to_string()),
+        branch: if project_value.is_empty() {
+            String::new()
+        } else {
+            current_branch(project_value.as_str()).unwrap_or_default()
+        },
     };
 
     if let Ok(payload) = serde_json::to_string(&status) {
@@ -85,6 +96,16 @@ pub fn send_task_status_with_running_and_message(
 }
 
 pub async fn websocket(req: HttpRequest, body: web::Payload) -> Result<HttpResponse, Error> {
+    #[derive(Deserialize)]
+    struct TaskWebsocketParams {
+        project: Option<String>,
+    }
+
+    let requested_project = web::Query::<TaskWebsocketParams>::from_query(req.query_string())
+        .ok()
+        .and_then(|query| query.into_inner().project)
+        .unwrap_or_default();
+
     let (response, mut session, mut msg_stream) = handle(&req, body)?;
     let mut status_rx = task_status_channel().subscribe();
 
@@ -94,7 +115,13 @@ pub async fn websocket(req: HttpRequest, body: web::Payload) -> Result<HttpRespo
         .and_then(|status| status.clone());
 
     if let Some(current_status) = current_status {
-        let _ = session.text(current_status).await;
+        if requested_project.is_empty() {
+            let _ = session.text(current_status).await;
+        } else if let Ok(status) = serde_json::from_str::<TaskRunningStatus>(&current_status) {
+            if status.project == requested_project {
+                let _ = session.text(current_status).await;
+            }
+        }
     }
 
     actix_web::rt::spawn(async move {
@@ -110,6 +137,18 @@ pub async fn websocket(req: HttpRequest, body: web::Payload) -> Result<HttpRespo
                 status = status_rx.recv() => {
                     match status {
                         Ok(payload) => {
+                            let should_send = if requested_project.is_empty() {
+                                true
+                            } else {
+                                serde_json::from_str::<TaskRunningStatus>(&payload)
+                                    .map(|status| status.project == requested_project)
+                                    .unwrap_or(false)
+                            };
+
+                            if !should_send {
+                                continue;
+                            }
+
                             if session.text(payload).await.is_err() {
                                 break;
                             }
@@ -294,7 +333,7 @@ async fn append_task_started_log_line(started_task_key: &str, project: &str) {
 }
 
 fn now_time_string() -> String {
-    Local::now().to_rfc3339_opts(SecondsFormat::Secs, false)
+    Local::now().format("%Y-%m-%d %H:%M:%S").to_string()
 }
 
 fn run_all_raw_file_name() -> String {

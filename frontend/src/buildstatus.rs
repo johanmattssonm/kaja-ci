@@ -30,10 +30,14 @@ struct BuildStatusConnection {
 struct TaskRunningStatus {
     ok: bool,
     running: bool,
-    task_key: String,
+    #[serde(default)]
+    project: String,
+
     time: String,
     href: String,
     message: Option<String>,
+    #[serde(default)]
+    branch: String,
 }
 
 #[derive(Deserialize, Debug)]
@@ -47,6 +51,8 @@ struct LatestLogMetadata {
     status: String,
     finished_at: Option<String>,
     raw_file: String,
+    #[serde(default)]
+    branch: String,
 }
 
 #[component("build-status")]
@@ -235,7 +241,7 @@ fn start_build_status_connection(id: String, project: String) {
                 abort_handle: None,
             });
 
-        entry.project = project;
+        entry.project = project.clone();
 
         if let Some(handle) = entry.abort_handle.take() {
             handle.abort();
@@ -246,12 +252,21 @@ fn start_build_status_connection(id: String, project: String) {
         abort_registration
     };
 
-    connect_task_ws(id, abort_registration);
+    connect_task_ws(id, project, abort_registration);
 }
 
-fn connect_task_ws(id: String, abort_registration: futures_util::future::AbortRegistration) {
+fn connect_task_ws(
+    id: String,
+    project: String,
+    abort_registration: futures_util::future::AbortRegistration,
+) {
     spawn_local(async move {
-        let ws = WebSocket::open("ws://127.0.0.1:2003/task");
+        let endpoint = format!(
+            "ws://127.0.0.1:2003/task?project={}",
+            js_sys::encode_uri_component(project.as_str())
+        );
+
+        let ws = WebSocket::open(endpoint.as_str());
 
         let Ok(ws) = ws else {
             log!("Failed to open task websocket");
@@ -272,27 +287,21 @@ fn connect_task_ws(id: String, abort_registration: futures_util::future::AbortRe
                     continue;
                 };
 
+                if !project.is_empty() && status.project != project {
+                    continue;
+                }
+
                 let local_time = local_time_label(status.time.as_str());
 
                 let is_log_href = status.href.starts_with("/log");
 
-                let mut label = if status.ok && !status.running && is_log_href {
-                    if local_time.is_empty() {
-                        "run-all".to_string()
-                    } else {
-                        format!("run-all - {}", local_time)
-                    }
+                let branch = normalized_branch(status.branch.as_str());
+                let mut label = if status.running {
+                    format_status_label("running", branch.as_str(), local_time.as_str())
+                } else if status.ok {
+                    format_status_label("done", branch.as_str(), local_time.as_str())
                 } else {
-                    let action = task_action_label(status.task_key.as_str());
-                    let outcome = if status.running {
-                        "running"
-                    } else if status.ok {
-                        "done"
-                    } else {
-                        "failed"
-                    };
-
-                    format!("{} {} {}", action, outcome, local_time)
+                    format_status_label("failed", branch.as_str(), local_time.as_str())
                 };
 
                 if !is_log_href {
@@ -349,18 +358,12 @@ fn load_latest_build_status(id: String, project: String) {
             local_time_label(time_value.as_str())
         };
 
+        let branch = normalized_branch(metadata.branch.as_str());
+
         let label = if metadata.status == "success" {
-            if local_time.is_empty() {
-                "✓ done".to_string()
-            } else {
-                format!("✓ done {}", local_time)
-            }
+            format_status_label("done", branch.as_str(), local_time.as_str())
         } else {
-            if local_time.is_empty() {
-                "✗ failed".to_string()
-            } else {
-                format!("✗ failed {}", local_time)
-            }
+            format_status_label("failed", branch.as_str(), local_time.as_str())
         };
 
         let raw_file_name = metadata
@@ -383,11 +386,29 @@ fn load_latest_build_status(id: String, project: String) {
     });
 }
 
-fn task_action_label(task_key: &str) -> &str {
-    task_key
-        .split_once('-')
-        .map(|(action, _)| action)
-        .unwrap_or(task_key)
+fn normalized_branch(input: &str) -> String {
+    let trimmed = input.trim();
+
+    if trimmed.is_empty() {
+        "main".to_string()
+    } else {
+        trimmed.to_string()
+    }
+}
+
+fn format_status_label(status: &str, branch: &str, local_time: &str) -> String {
+    let icon = match status {
+        "done" => "✓",
+        "failed" => "✗",
+        "running" => "⟳",
+        _ => "",
+    };
+
+    if local_time.is_empty() {
+        format!("{} {} {}", icon, status, branch)
+    } else {
+        format!("{} {} {} {}", icon, status, branch, local_time)
+    }
 }
 
 fn local_time_label(input: &str) -> String {
@@ -397,8 +418,17 @@ fn local_time_label(input: &str) -> String {
         return input.to_string();
     }
 
-    let value = date.to_locale_string("en-GB", &wasm_bindgen::JsValue::UNDEFINED);
-    value.as_string().unwrap_or_else(|| input.to_string())
+    let year = date.get_full_year();
+    let month = date.get_month() + 1;
+    let day = date.get_date();
+    let hour = date.get_hours();
+    let minute = date.get_minutes();
+    let second = date.get_seconds();
+
+    format!(
+        "{:04}-{:02}-{:02} {:02}:{:02}:{:02}",
+        year, month, day, hour, minute, second
+    )
 }
 
 fn render_status(id: &str, href: &str, label: &str) {
