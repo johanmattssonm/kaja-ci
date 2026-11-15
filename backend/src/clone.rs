@@ -23,9 +23,9 @@ pub fn load_settings() -> Result<AppSettings, String> {
     let settings_path = kaja_ci_settings_path()?;
 
     if !settings_path.exists() {
-        let settings = AppSettings::default();
-        save_settings(&settings)?;
-        return Ok(settings);
+        std::fs::write(settings_path.as_path(), "{}")
+            .map_err(|err| format!("Failed to write {}: {err}", settings_path.display()))?;
+        return Ok(AppSettings::default());
     }
 
     let content = std::fs::read_to_string(settings_path.as_path())

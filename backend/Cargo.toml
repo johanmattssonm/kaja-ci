@@ -1,7 +1,11 @@
 [package]
-name = "kaja-ci"
+name = "kaja-ci-backend"
 version = "0.1.0"
 edition = "2024"
+
+[lib]
+name = "kaja_ci_backend"
+path = "src/lib.rs"
 
 [dependencies]
 actix-web = "4"

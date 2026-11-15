@@ -5,6 +5,7 @@ use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Serialize, Deserialize, Default)]
 pub struct AppSettings {
+    #[serde(default)]
     pub projects: Vec<String>,
 }
 
