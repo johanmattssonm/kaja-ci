@@ -396,7 +396,7 @@ async fn abort_task(task_key: Option<&str>, project: Option<&str>) -> bool {
         return false;
     };
 
-    match Request::get(endpoint.as_str()).send().await {
+    match Request::post(endpoint.as_str()).send().await {
         Ok(response) => response.ok(),
         Err(_) => false,
     }

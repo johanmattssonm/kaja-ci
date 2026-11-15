@@ -83,12 +83,7 @@ async fn abort_with_params(params: AbortParams) -> HttpResponse {
     }))
 }
 
-#[actix_web::get("/abort")]
-pub async fn abort(params: web::Query<AbortParams>) -> impl Responder {
-    abort_with_params(params.into_inner()).await
-}
-
 #[actix_web::post("/abort")]
-pub async fn abort_post(params: web::Query<AbortParams>) -> impl Responder {
+pub async fn abort(params: web::Query<AbortParams>) -> impl Responder {
     abort_with_params(params.into_inner()).await
 }

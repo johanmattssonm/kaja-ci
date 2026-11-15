@@ -44,7 +44,6 @@ async fn main() -> std::io::Result<()> {
             .service(settings::save_settings)
             .service(settings::load_settings)
             .service(abort::abort)
-            .service(abort::abort_post)
             .service(test::test)
             .service(release::release)
             .service(clean::clean)

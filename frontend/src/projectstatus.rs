@@ -23,6 +23,8 @@ struct ProjectStatus {
     pub terminal: String,
     #[attribute]
     pub custom: Vec<CustomCommand>,
+    #[attribute]
+    pub branch: String,
 }
 
 impl Component for ProjectStatusComponent {
@@ -116,7 +118,8 @@ impl ProjectStatusComponent {
             .unwrap_or_else(|| "unknown".to_string());
 
         let content = html! {{
-            <p>$project branch $branch</p>
+            <p>$project $branch</p>
+            <build-status project="$project"></build-status>
             <div class="project-actions">
                 <button class="project-action-button" onclick="runAll('$project')">Run</button>
 
