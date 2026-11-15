@@ -33,6 +33,10 @@ struct TaskRunningStatus {
     #[serde(default)]
     project: String,
 
+    #[serde(default)]
+    task_key: String,
+    #[serde(default)]
+    action: String,
     time: String,
     href: String,
     message: Option<String>,
@@ -53,6 +57,10 @@ struct LatestLogMetadata {
     raw_file: String,
     #[serde(default)]
     branch: String,
+    #[serde(default)]
+    action: String,
+    #[serde(default)]
+    task_key: String,
 }
 
 #[component("build-status")]
@@ -296,12 +304,23 @@ fn connect_task_ws(
                 let is_log_href = status.href.starts_with("/log");
 
                 let branch = normalized_branch(status.branch.as_str());
+                let task = normalized_task(status.action.as_str(), status.task_key.as_str());
                 let mut label = if status.running {
-                    format_status_label("running", branch.as_str(), local_time.as_str())
+                    format_status_label(
+                        "running",
+                        branch.as_str(),
+                        task.as_str(),
+                        local_time.as_str(),
+                    )
                 } else if status.ok {
-                    format_status_label("done", branch.as_str(), local_time.as_str())
+                    format_status_label("done", branch.as_str(), task.as_str(), local_time.as_str())
                 } else {
-                    format_status_label("failed", branch.as_str(), local_time.as_str())
+                    format_status_label(
+                        "failed",
+                        branch.as_str(),
+                        task.as_str(),
+                        local_time.as_str(),
+                    )
                 };
 
                 if !is_log_href {
@@ -359,11 +378,17 @@ fn load_latest_build_status(id: String, project: String) {
         };
 
         let branch = normalized_branch(metadata.branch.as_str());
+        let task = normalized_task(metadata.action.as_str(), metadata.task_key.as_str());
 
         let label = if metadata.status == "success" {
-            format_status_label("done", branch.as_str(), local_time.as_str())
+            format_status_label("done", branch.as_str(), task.as_str(), local_time.as_str())
         } else {
-            format_status_label("failed", branch.as_str(), local_time.as_str())
+            format_status_label(
+                "failed",
+                branch.as_str(),
+                task.as_str(),
+                local_time.as_str(),
+            )
         };
 
         let raw_file_name = metadata
@@ -396,7 +421,7 @@ fn normalized_branch(input: &str) -> String {
     }
 }
 
-fn format_status_label(status: &str, branch: &str, local_time: &str) -> String {
+fn format_status_label(status: &str, branch: &str, task: &str, local_time: &str) -> String {
     let icon = match status {
         "done" => "✓",
         "failed" => "✗",
@@ -405,10 +430,30 @@ fn format_status_label(status: &str, branch: &str, local_time: &str) -> String {
     };
 
     if local_time.is_empty() {
-        format!("{} {} {}", icon, status, branch)
+        format!("{} {} {} {}", icon, status, branch, task)
     } else {
-        format!("{} {} {} {}", icon, status, branch, local_time)
+        format!("{} {} {} {} {}", icon, status, branch, task, local_time)
     }
+}
+
+fn normalized_task(action: &str, task_key: &str) -> String {
+    let action = action.trim();
+
+    let raw = if !action.is_empty() && action != "log" {
+        action
+    } else if task_key.trim() == "all-done" {
+        "run-all"
+    } else if !task_key.trim().is_empty() {
+        task_key
+            .split_once('-')
+            .map(|(name, _)| name)
+            .unwrap_or(task_key)
+            .trim()
+    } else {
+        "task"
+    };
+
+    raw.replace(['-', '_'], " ")
 }
 
 fn local_time_label(input: &str) -> String {
