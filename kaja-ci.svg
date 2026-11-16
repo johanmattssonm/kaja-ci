@@ -1,5 +1,5 @@
 <?xml version="1.0" encoding="UTF-8" standalone="no"?>
-<!-- Created with Inkscape (http://www.inkscape.org/) -->
+<!-- Created with Inkscape for Kajacode: https://kajacode.com/ -->
 
 <svg
     width="210mm"
@@ -16,40 +16,10 @@
     xmlns="http://www.w3.org/2000/svg"
     xmlns:svg="http://www.w3.org/2000/svg">
 
-    <sodipodi:namedview
-        id="namedview1"
-        pagecolor="#ffffff"
-        bordercolor="#000000"
-        borderopacity="0.25"
-        inkscape:showpageshadow="2"
-        inkscape:pageopacity="0.0"
-        inkscape:pagecheckerboard="0"
-        inkscape:deskcolor="#d1d1d1"
-        inkscape:document-units="mm"
-        inkscape:zoom="0.70710678"
-        inkscape:cx="188.0904"
-        inkscape:cy="372.64527"
-        inkscape:window-width="1920"
-        inkscape:window-height="1011"
-        inkscape:window-x="0"
-        inkscape:window-y="0"
-        inkscape:window-maximized="1"
-        inkscape:current-layer="layer6"
-    />
-
-    <defs id="defs1" />
-
     <path
         style="display:none;fill:#565a65;fill-opacity:1;stroke-width:0.264583"
         d="m 101.69921,159.08073 -0.5457,5.29166 4.00182,7.52409 v -5.07669 l -1.24023,-2.18281 1.15755,-2.33164 -0.0661,-3.00964 z"
         id="path10"
-    />
-
-    <g
-        inkscape:label="Layer 1"
-        inkscape:groupmode="layer"
-        id="layer1"
-        style="display:inline"
     />
 
     <g
@@ -127,18 +97,11 @@
         inkscape:label="Layer 4"
         style="display:inline"
     >
-        <g
-            id="layer6"
-            inkscape:label="Layer 6"
-            style="display:inline"
-            inkscape:groupmode="layer"
-        >
-            <path
-                style="fill:#565a65;fill-opacity:1;stroke-width:0.598563"
-                d="m 149.99395,61.425758 6.17267,-8.679159 c 0,0 5.57412,1.421595 8.52952,4.002884 2.95541,2.58131 6.47195,6.584194 6.47195,6.584194 0,0 -6.99571,-2.768357 -12.00865,-2.917984 -5.01298,-0.149763 -9.16549,1.010065 -9.16549,1.010065 z"
-                id="path7"
-            />
-        </g>
+        <path
+            style="fill:#565a65;fill-opacity:1;stroke-width:0.598563"
+            d="m 149.99395,61.425758 6.17267,-8.679159 c 0,0 5.57412,1.421595 8.52952,4.002884 2.95541,2.58131 6.47195,6.584194 6.47195,6.584194 0,0 -6.99571,-2.768357 -12.00865,-2.917984 -5.01298,-0.149763 -9.16549,1.010065 -9.16549,1.010065 z"
+            id="path7"
+        />
     </g>
 
     <g
@@ -154,20 +117,6 @@
             sodipodi:nodetypes="cssscscscsscscccsccscccccccssscc"
         />
     </g>
-
-    <g
-        inkscape:groupmode="layer"
-        id="layer8"
-        inkscape:label="Layer 8"
-        style="display:none"
-    />
-
-    <g
-        inkscape:groupmode="layer"
-        id="layer7"
-        inkscape:label="Layer 7"
-        style="display:inline"
-    />
 
     <path
         style="display:inline;fill:#35393e;fill-opacity:1;stroke-width:0.598563"
