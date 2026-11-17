@@ -138,9 +138,28 @@ pub async fn load_settings(params: web::Query<ProjectGetParams>) -> impl Respond
             .body(config_string);
     }
 
-    println!("Failed to load settings from {:?}", project_dir);
+    let defaults = BuildCommands::default();
+    let content = match serde_json::to_string_pretty(&defaults) {
+        Ok(content) => content,
+        Err(err) => {
+            println!(
+                "Failed to serialize default settings for {:?}: {}",
+                project_dir, err
+            );
+            return HttpResponse::InternalServerError()
+                .content_type(ContentType::json())
+                .body("{ \"ok\": false, \"message\": \"Failed to create default settings.\" }");
+        }
+    };
 
-    return HttpResponse::BadRequest()
+    if let Err(err) = fs::write(project_dir.as_path(), content.as_str()) {
+        println!(
+            "Failed to write default settings to {:?}: {}",
+            project_dir, err
+        );
+    }
+
+    HttpResponse::Ok()
         .content_type(ContentType::json())
-        .body("{ \"ok\": false, \"message\": \"Can't write settings file.\" }");
+        .body(content)
 }

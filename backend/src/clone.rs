@@ -9,6 +9,11 @@ use crate::settingsfile::{
     AppSettings, kaja_ci_base_dir, kaja_ci_projects_dir, kaja_ci_settings_path,
 };
 
+#[path = "../../frontend/src/rest.rs"]
+mod rest;
+
+use rest::BuildCommands;
+
 #[derive(Debug, Deserialize)]
 pub struct CloneParams {
     pub repo: Option<String>,
@@ -70,6 +75,21 @@ pub fn ensure_project_in_settings(project_path: &Path) -> Result<(), String> {
     }
 
     Ok(())
+}
+
+pub fn ensure_project_ci_defaults(project_path: &Path) -> Result<(), String> {
+    let ci_path = project_path.join("ci.json");
+
+    if ci_path.exists() {
+        return Ok(());
+    }
+
+    let defaults = BuildCommands::default();
+    let content = serde_json::to_string_pretty(&defaults)
+        .map_err(|err| format!("Failed to serialize default ci.json: {err}"))?;
+
+    std::fs::write(ci_path.as_path(), content)
+        .map_err(|err| format!("Failed to write {}: {err}", ci_path.display()))
 }
 
 pub fn clone_target_dir_from_command(
@@ -190,6 +210,7 @@ pub fn clone_repo(repo_url: &str) -> Result<PathBuf, String> {
     }
 
     ensure_project_in_settings(target_dir.as_path())?;
+    ensure_project_ci_defaults(target_dir.as_path())?;
 
     Ok(target_dir)
 }

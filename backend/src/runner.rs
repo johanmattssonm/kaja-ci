@@ -22,7 +22,9 @@ const TASK_IDLE_CHECK_INTERVAL_SECONDS: u64 = 30;
 mod rest;
 
 use crate::app::APP_DATA;
-use crate::clone::{clone_target_dir_from_command, ensure_project_in_settings};
+use crate::clone::{
+    clone_target_dir_from_command, ensure_project_ci_defaults, ensure_project_in_settings,
+};
 use rest::{Action, ActionResponse, BuildCommands};
 
 pub const BUILD_DIR: &str = "/home/johan/Downloads/resting-chair";
@@ -1678,6 +1680,14 @@ async fn start_detached_action(
                                     task_key_exit.as_str(),
                                     &stdout_tx_exit,
                                     format!("Failed to save project in settings: {err}\n"),
+                                );
+                            }
+
+                            if let Err(err) = ensure_project_ci_defaults(target_dir.as_path()) {
+                                broadcast_task_stdout(
+                                    task_key_exit.as_str(),
+                                    &stdout_tx_exit,
+                                    format!("Failed to write default ci settings: {err}\n"),
                                 );
                             }
                         }
