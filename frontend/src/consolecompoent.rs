@@ -246,6 +246,7 @@ impl ConsoleComponent {
         let content = html! {{
             <h1 id="status">$(initial_status)</h1>
             <p>Project Folder: $(project)</p>
+            <p>Task: $(action)</p>
             <pre id="$(id)-output" class="$(output_class)" tabindex="0">
                 <rust>
                     if show_connect_button {
