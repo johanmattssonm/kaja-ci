@@ -476,6 +476,21 @@ fn local_time_label(input: &str) -> String {
     )
 }
 
+pub(crate) fn render_build_status_error(project: &str, message: &str) {
+    if project.trim().is_empty() || message.trim().is_empty() {
+        return;
+    }
+
+    let component_id = BUILD_STATUS_COMPONENT_BY_PROJECT
+        .with(|by_project| by_project.borrow().get(project).cloned());
+
+    let Some(component_id) = component_id else {
+        return;
+    };
+
+    render_status(component_id.as_str(), "", message);
+}
+
 fn render_status(id: &str, href: &str, label: &str) {
     let element = match get_element_by_id(id) {
         Some(element) => element,
@@ -485,8 +500,17 @@ fn render_status(id: &str, href: &str, label: &str) {
         }
     };
 
-    if href.trim().is_empty() || label.trim().is_empty() {
+    if label.trim().is_empty() {
         element.set_inner_html("");
+        return;
+    }
+
+    if href.trim().is_empty() {
+        let content = html! {{
+            <span>$label</span>
+        }};
+
+        element.set_inner_html(content.as_str());
         return;
     }
 

@@ -1,3 +1,4 @@
+use crate::buildstatus::render_build_status_error;
 use crate::rest::{BuildCommands, CustomCommand};
 
 use gloo_net::http::Request;
@@ -222,17 +223,58 @@ fn go_to(url: String) {
     let _ = window.location().set_href(url.as_str());
 }
 
+#[derive(Deserialize)]
+struct RunAllResponse {
+    ok: bool,
+    message: Option<String>,
+}
+
 #[callback("runAll")]
 async fn run_all(project: String) {
     let endpoint = format!("/run-all?project={}", project);
-    match Request::get(endpoint.as_str()).send().await {
-        Ok(_) => {
-            log!("Running all tasks.");
-        }
+
+    let response = match Request::get(endpoint.as_str()).send().await {
+        Ok(response) => response,
         Err(_) => {
-            log!("Failed to run all tasks.");
+            render_build_status_error(project.as_str(), "Failed to run all tasks.");
+            return;
         }
     };
+
+    let fallback_message = "Run all has nothing to run.".to_string();
+    let request_ok = response.ok();
+
+    let message = match response.text().await {
+        Ok(body) => {
+            if let Ok(parsed) = serde_json::from_str::<RunAllResponse>(body.as_str()) {
+                if parsed.ok {
+                    log!("Running all tasks.");
+                    return;
+                }
+
+                parsed.message.unwrap_or(fallback_message)
+            } else if request_ok {
+                log!("Running all tasks.");
+                return;
+            } else if body.trim().is_empty() {
+                fallback_message
+            } else {
+                body
+            }
+        }
+        Err(_) => {
+            if request_ok {
+                log!("Running all tasks.");
+                return;
+            }
+
+            fallback_message
+        }
+    };
+
+    if !message.trim().is_empty() {
+        render_build_status_error(project.as_str(), message.as_str());
+    }
 }
 
 #[derive(Deserialize)]
