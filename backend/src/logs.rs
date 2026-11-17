@@ -13,6 +13,7 @@ use crate::app::{TaskHistoryMetadata, log_base_dir};
 pub struct LogParams {
     pub project: Option<String>,
     pub file: Option<String>,
+    pub action: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -62,6 +63,10 @@ pub async fn log_page(params: web::Query<LogParams>) -> impl Responder {
 pub async fn latest_log(params: web::Query<LogParams>) -> impl Responder {
     let metadata = if let Some(file_name) = safe_history_file_name(params.file.as_deref()) {
         metadata_for_raw_file(file_name.as_str())
+    } else if let (Some(project), Some(action)) =
+        (params.project.as_deref(), params.action.as_deref())
+    {
+        latest_metadata_for_project_action(project, action)
     } else {
         params
             .project
@@ -79,7 +84,7 @@ pub async fn latest_log(params: web::Query<LogParams>) -> impl Responder {
 #[actix_web::get("/log/raw")]
 pub async fn latest_log_raw(params: web::Query<LogParams>) -> impl Responder {
     let raw_path = if let Some(file_name) = safe_history_file_name(params.file.as_deref()) {
-log_base_dir().join(file_name)
+        log_base_dir().join(file_name)
     } else {
         let Some(project) = params.project.as_deref() else {
             return HttpResponse::BadRequest()
@@ -87,7 +92,13 @@ log_base_dir().join(file_name)
                 .body("Missing query: file or project");
         };
 
-        let Some(metadata) = latest_metadata_for_project(project) else {
+        let metadata = if let Some(action) = params.action.as_deref() {
+            latest_metadata_for_project_action(project, action)
+        } else {
+            latest_metadata_for_project(project)
+        };
+
+        let Some(metadata) = metadata else {
             return HttpResponse::NotFound()
                 .content_type(ContentType::plaintext())
                 .body("No log history found.");
@@ -242,10 +253,36 @@ pub fn latest_metadata_for_project(project: &str) -> Option<TaskHistoryMetadata>
     metadata_for_project(Some(project)).into_iter().next()
 }
 
+pub fn latest_metadata_for_project_action(
+    project: &str,
+    action: &str,
+) -> Option<TaskHistoryMetadata> {
+    metadata_for_project_action(project, action)
+        .into_iter()
+        .next()
+}
+
 fn metadata_for_project(project: Option<&str>) -> Vec<TaskHistoryMetadata> {
     let mut records = all_history_metadata()
         .into_iter()
         .filter(|metadata| project.is_none_or(|project| metadata.project == project))
+        .collect::<Vec<_>>();
+
+    records.sort_by(|a, b| b.datestamp.cmp(&a.datestamp));
+    records
+}
+
+fn metadata_for_project_action(project: &str, action: &str) -> Vec<TaskHistoryMetadata> {
+    let normalized_action = action.trim();
+
+    if normalized_action.is_empty() {
+        return metadata_for_project(Some(project));
+    }
+
+    let mut records = all_history_metadata()
+        .into_iter()
+        .filter(|metadata| metadata.project == project)
+        .filter(|metadata| metadata.action == normalized_action)
         .collect::<Vec<_>>();
 
     records.sort_by(|a, b| b.datestamp.cmp(&a.datestamp));
@@ -319,7 +356,6 @@ fn safe_history_file_name(input: Option<&str>) -> Option<String> {
 
     Some(candidate)
 }
-
 
 fn raw_file_name(raw_file: &str) -> &str {
     Path::new(raw_file)

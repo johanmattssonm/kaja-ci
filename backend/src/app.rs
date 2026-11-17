@@ -20,6 +20,7 @@ pub struct AppData {
     pub tasks: HashMap<String, Task>,
     pub task_history: HashMap<String, Vec<u8>>,
     pub task_history_files: HashMap<String, TaskHistoryFiles>,
+    pub task_history_metadata: HashMap<String, TaskHistoryMetadata>,
 }
 
 #[derive(Clone)]
@@ -36,6 +37,7 @@ pub static APP_DATA: LazyLock<RwLock<AppData>> = LazyLock::new(|| {
         tasks: HashMap::new(), //
         task_history: HashMap::new(),
         task_history_files: HashMap::new(),
+        task_history_metadata: HashMap::new(),
         running_project: String::new(),
         running_task: None,
         running_task_name: String::new(),
@@ -175,7 +177,21 @@ impl AppData {
                 raw_history_file_name,
             )
         {
-            self.task_history_files.insert(key.clone(), files);
+            self.task_history_files.insert(key.clone(), files.clone());
+            self.task_history_metadata.insert(
+                key.clone(),
+                TaskHistoryMetadata {
+                    datestamp: files.datestamp.clone(),
+                    task_key: key.clone(),
+                    project: files.project.clone(),
+                    action: files.action.clone(),
+                    status: "running".to_string(),
+                    started_at: files.started_at.clone(),
+                    finished_at: None,
+                    raw_file: files.raw_path.to_string_lossy().to_string(),
+                    branch: files.branch.clone(),
+                },
+            );
         }
 
         let task = Task {
@@ -262,13 +278,15 @@ impl AppData {
                     .or_else(|| key.split_once('-').map(|(_, project)| project.to_string()))
                     .unwrap_or_default();
 
-                write_task_history_completion(
+                if let Some(metadata) = write_task_history_completion(
                     self.task_history_files.get(key),
                     key,
                     completed_action.as_str(),
                     completed_project.as_str(),
                     ok.unwrap_or(false),
-                );
+                ) {
+                    self.task_history_metadata.insert(key.to_string(), metadata);
+                }
                 if !Self::has_terminal_task_key(key) {
                     send_task_status(
                         key,
@@ -298,13 +316,15 @@ impl AppData {
             .or_else(|| key.split_once('-').map(|(_, project)| project.to_string()))
             .unwrap_or_default();
 
-        write_task_history_completion(
+        if let Some(metadata) = write_task_history_completion(
             self.task_history_files.get(key),
             key,
             completed_action.as_str(),
             completed_project.as_str(),
             ok.unwrap_or(false),
-        );
+        ) {
+            self.task_history_metadata.insert(key.to_string(), metadata);
+        }
 
         if running_key == key {
             self.running_task = None;
@@ -447,9 +467,9 @@ fn write_task_history_completion(
     action: &str,
     project: &str,
     ok: bool,
-) {
+) -> Option<TaskHistoryMetadata> {
     let Some(files) = files else {
-        return;
+        return None;
     };
 
     let metadata = TaskHistoryMetadata {
@@ -477,6 +497,7 @@ fn write_task_history_completion(
     };
 
     write_metadata(files.meta_path.as_path(), &metadata);
+    Some(metadata)
 }
 
 fn write_metadata(path: &Path, metadata: &TaskHistoryMetadata) {

@@ -676,7 +676,7 @@ async fn ensure_builder_task_connected(action: &str, project: &str) {
         return;
     }
 
-    if action != "clean" && show_latest_history_for_action(action, project).await {
+    if action != "clean" && show_latest_history_for_action(action, project, id.as_str()).await {
         return;
     }
 
@@ -693,8 +693,12 @@ fn raw_file_name(raw_file: &str) -> Option<String> {
     }
 }
 
-async fn show_latest_history_for_action(action: &str, project: &str) -> bool {
-    let endpoint = format!("/log/latest?project={}", url_encode(project));
+async fn show_latest_history_for_action(action: &str, project: &str, component_id: &str) -> bool {
+    let endpoint = format!(
+        "/log/latest?project={}&action={}",
+        url_encode(project),
+        url_encode(action)
+    );
 
     let response = match Request::get(endpoint.as_str()).send().await {
         Ok(response) => response,
@@ -719,15 +723,11 @@ async fn show_latest_history_for_action(action: &str, project: &str) -> bool {
         return false;
     };
 
-    if metadata.action != action {
-        return false;
-    }
-
     let Some(raw_name) = raw_file_name(metadata.raw_file.as_str()) else {
         return false;
     };
 
-    load_latest_raw_log("console-component".to_string(), String::new(), raw_name);
+    load_latest_raw_log(component_id.to_string(), String::new(), raw_name);
     true
 }
 
