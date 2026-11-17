@@ -57,6 +57,11 @@ pub async fn index() -> impl Responder {
                         <button type="submit">Clone repository</button>
                     </form>
 
+                    <form action="/add-project" method="get">
+                        <input type="text" name="add-project" placeholder="/absolute/path/to/project" />
+                        <button type="submit">add project</button>
+                    </form>
+
                     <rust>
                         if let Some(err) = settings_error.as_ref() {
                             <markup>

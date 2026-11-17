@@ -77,6 +77,32 @@ pub fn ensure_project_in_settings(project_path: &Path) -> Result<(), String> {
     Ok(())
 }
 
+pub fn add_existing_project(project_path: &str) -> Result<PathBuf, String> {
+    let input = project_path.trim();
+    if input.is_empty() {
+        return Err("Project path is required.".to_string());
+    }
+
+    let canonical = std::fs::canonicalize(input)
+        .map_err(|err| format!("Failed to resolve project path '{input}': {err}"))?;
+
+    if !canonical.is_dir() {
+        return Err("Project folder does not exist.".to_string());
+    }
+
+    let metadata = std::fs::metadata(canonical.as_path())
+        .map_err(|err| format!("Failed to read project folder metadata: {err}"))?;
+
+    if metadata.permissions().readonly() {
+        return Err("Project folder is not writable.".to_string());
+    }
+
+    ensure_project_in_settings(canonical.as_path())?;
+    ensure_project_ci_defaults(canonical.as_path())?;
+
+    Ok(canonical)
+}
+
 pub fn ensure_project_ci_defaults(project_path: &Path) -> Result<(), String> {
     let ci_path = project_path.join("ci.json");
 

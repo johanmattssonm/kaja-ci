@@ -17,6 +17,10 @@ project-status {
     margin-bottom: 2em;
 }
 
+form {
+    margin-bottom: 2em;
+}
+
 .project-status-card {
     background: linear-gradient(180deg, #2b2b2b 0%, #212121 100%);
     border: 1px solid #3b3b3b;

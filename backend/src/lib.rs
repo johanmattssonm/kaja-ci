@@ -4,6 +4,7 @@ use std::io;
 use std::path::PathBuf;
 
 mod abort;
+mod addproject;
 mod app;
 mod branch;
 mod build;
@@ -42,6 +43,7 @@ pub async fn run_server() -> io::Result<()> {
         App::new()
             .service(fs::Files::new("/pkg", pkg_dir.clone()))
             .service(index::index)
+            .service(addproject::add_project)
             .service(clone::clone_handler)
             .service(clone::compact_clone_handler)
             .service(branch::branch)
