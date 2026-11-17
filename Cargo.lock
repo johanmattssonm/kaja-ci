@@ -400,6 +400,7 @@ dependencies = [
  "js-sys",
  "kaja-web",
  "serde",
+ "serde_json",
  "tauri-wasm",
  "wasm-bindgen",
  "wasm-bindgen-futures",

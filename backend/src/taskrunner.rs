@@ -3,6 +3,7 @@ use actix_web::{Error, HttpRequest, HttpResponse, Responder, web};
 use actix_ws::{Message, handle};
 use chrono::Local;
 use serde::{Deserialize, Serialize};
+
 use std::path::PathBuf;
 use std::sync::{OnceLock, RwLock as StdRwLock};
 use tokio::sync::broadcast;
@@ -14,11 +15,6 @@ use crate::runner::{RunTaskError, start_run_task};
 #[derive(Deserialize)]
 pub struct RunAllParams {
     pub project: String,
-}
-
-#[derive(Deserialize)]
-struct BuildCommands {
-    tasks: Option<Vec<String>>,
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug)]
@@ -220,14 +216,35 @@ fn load_task_keys(project: &str) -> Vec<String> {
     let mut project_dir = PathBuf::from(project);
     project_dir.push("ci.json");
 
-    std::fs::read_to_string(&project_dir)
-        .ok()
-        .and_then(|content| serde_json::from_str::<BuildCommands>(&content).ok())
-        .and_then(|config| config.tasks)
-        .unwrap_or_default()
-        .into_iter()
-        .filter(|task| !task.trim().is_empty())
-        .collect()
+    let Ok(content) = std::fs::read_to_string(&project_dir) else {
+        return Vec::new();
+    };
+
+    let Ok(config_json) = serde_json::from_str::<serde_json::Value>(content.as_str()) else {
+        return Vec::new();
+    };
+
+    let run_all = config_json
+        .get("run-all")
+        .and_then(|value| value.as_array())
+        .cloned()
+        .unwrap_or_default();
+
+    let mut tasks = Vec::<String>::new();
+    for value in run_all {
+        let Some(task_key) = value.as_str() else {
+            continue;
+        };
+
+        let task_key = task_key.trim();
+        if task_key.is_empty() || tasks.iter().any(|existing| existing == task_key) {
+            continue;
+        }
+
+        tasks.push(task_key.to_string());
+    }
+
+    tasks
 }
 
 fn task_href(action: &str, project: &str) -> String {

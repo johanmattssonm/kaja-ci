@@ -1,4 +1,69 @@
 use serde::*;
+use std::collections::HashMap;
+
+#[derive(Debug)]
+struct ParsedTaskEntry {
+    task: String,
+    order: i32,
+    index: usize,
+}
+
+fn deserialize_tasks_option<'de, D>(deserializer: D) -> Result<Option<Vec<String>>, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    let raw = Option::<Vec<serde_json::Value>>::deserialize(deserializer)?;
+
+    let Some(raw) = raw else {
+        return Ok(None);
+    };
+
+    let mut parsed = Vec::<ParsedTaskEntry>::new();
+
+    for (index, value) in raw.into_iter().enumerate() {
+        let serde_json::Value::Object(map) = value else {
+            continue;
+        };
+
+        let task = map
+            .get("task")
+            .and_then(|value| value.as_str())
+            .or_else(|| map.get("label").and_then(|value| value.as_str()))
+            .unwrap_or_default()
+            .trim()
+            .to_string();
+
+        if task.is_empty() {
+            continue;
+        }
+
+        let order = map
+            .get("order")
+            .and_then(|value| value.as_i64())
+            .and_then(|value| i32::try_from(value).ok())
+            .unwrap_or((index as i32) + 1);
+
+        parsed.push(ParsedTaskEntry { task, order, index });
+    }
+
+    parsed.sort_by(|a, b| {
+        a.order
+            .cmp(&b.order)
+            .then(a.index.cmp(&b.index))
+            .then(a.task.cmp(&b.task))
+    });
+
+    let mut tasks = Vec::<String>::new();
+    for entry in parsed {
+        if tasks.iter().any(|existing| existing == &entry.task) {
+            continue;
+        }
+
+        tasks.push(entry.task);
+    }
+
+    Ok(Some(tasks))
+}
 
 #[derive(Serialize, Deserialize, Debug, Default)]
 pub struct Action {
@@ -34,7 +99,11 @@ pub struct BuildCommands {
     pub clean: Option<String>,
     pub terminal: Option<String>,
     pub custom_comands: Option<Vec<CustomCommand>>,
+    #[serde(default, deserialize_with = "deserialize_tasks_option")]
     pub tasks: Option<Vec<String>>,
+    pub order: Option<HashMap<String, i32>>,
+    #[serde(rename = "run-all")]
+    pub run_all: Option<Vec<String>>,
 }
 
 impl Default for BuildCommands {
@@ -49,6 +118,8 @@ impl Default for BuildCommands {
             terminal: Some("bash".to_string()),
             custom_comands: None,
             tasks: None,
+            order: None,
+            run_all: None,
         }
     }
 }

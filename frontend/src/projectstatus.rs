@@ -4,7 +4,24 @@ use crate::rest::{BuildCommands, CustomCommand};
 use gloo_net::http::Request;
 use kaja_web::prelude::*;
 use serde::Deserialize;
+use serde_json::Value;
+use std::collections::HashMap;
 use wasm_bindgen_futures::spawn_local;
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(untagged)]
+enum TaskAttribute {
+    Name(String),
+    Detailed(TaskDetails),
+}
+
+#[derive(Debug, Clone, Deserialize)]
+struct TaskDetails {
+    task: Option<String>,
+    label: Option<String>,
+    order: Option<i32>,
+    custom: Option<bool>,
+}
 
 #[component("project-status")]
 struct ProjectStatus {
@@ -12,6 +29,8 @@ struct ProjectStatus {
     pub project: String,
     #[attribute]
     pub git: String,
+    #[attribute]
+    pub clone: String,
     #[attribute]
     pub build: String,
     #[attribute]
@@ -26,6 +45,10 @@ struct ProjectStatus {
     pub custom: Vec<CustomCommand>,
     #[attribute]
     pub branch: String,
+    #[attribute]
+    pub tasks: Vec<Value>,
+    #[attribute]
+    pub order: HashMap<String, i32>,
 }
 
 impl Component for ProjectStatusComponent {
@@ -57,6 +80,7 @@ impl Component for ProjectStatusComponent {
             let settings = settings.unwrap();
 
             let git = settings.git.unwrap_or_default();
+            let clone = settings.clone.unwrap_or_default();
             let build = settings.build.unwrap_or_default();
             let test = settings.test.unwrap_or_default();
             let release = settings.release.unwrap_or_default();
@@ -64,14 +88,27 @@ impl Component for ProjectStatusComponent {
             let terminal = settings.terminal.unwrap_or_default();
             let custom = settings.custom_comands.unwrap_or_default();
             let custom_json = serde_json::to_string(&custom).unwrap_or_else(|_| "[]".to_string());
+            let tasks = settings
+                .run_all
+                .clone()
+                .or(settings.tasks.clone())
+                .unwrap_or_else(|| {
+                    vec!["git".to_string(), "build".to_string(), "test".to_string()]
+                });
+            let order = settings.order.unwrap_or_default();
+            let tasks_json = serde_json::to_string(&tasks).unwrap_or_else(|_| "[]".to_string());
+            let order_json = serde_json::to_string(&order).unwrap_or_else(|_| "{}".to_string());
 
-            element.set_attribute("git", git.as_str());
-            element.set_attribute("build", build.as_str());
-            element.set_attribute("test", test.as_str());
-            element.set_attribute("release", release.as_str());
-            element.set_attribute("clean", clean.as_str());
-            element.set_attribute("terminal", terminal.as_str());
-            element.set_attribute("custom", custom_json.as_str());
+            let _ = element.set_attribute("git", git.as_str());
+            let _ = element.set_attribute("clone", clone.as_str());
+            let _ = element.set_attribute("build", build.as_str());
+            let _ = element.set_attribute("test", test.as_str());
+            let _ = element.set_attribute("release", release.as_str());
+            let _ = element.set_attribute("clean", clean.as_str());
+            let _ = element.set_attribute("terminal", terminal.as_str());
+            let _ = element.set_attribute("custom", custom_json.as_str());
+            let _ = element.set_attribute("tasks", tasks_json.as_str());
+            let _ = element.set_attribute("order", order_json.as_str());
         });
 
         spawn_local(async move {
@@ -96,11 +133,14 @@ impl Component for ProjectStatusComponent {
             || name == "custom"
             || name == "branch"
             || name == "git"
+            || name == "clone"
             || name == "build"
             || name == "test"
             || name == "release"
             || name == "clean"
             || name == "terminal"
+            || name == "tasks"
+            || name == "order"
         {
             self.render();
         }
@@ -124,6 +164,110 @@ impl ProjectStatusComponent {
         let branch: String = self
             .get_attribute("branch")
             .unwrap_or_else(|| "unknown".to_string());
+        let tasks: Vec<TaskAttribute> = self.get_attribute("tasks").unwrap_or_default();
+        let order: HashMap<String, i32> = self.get_attribute("order").unwrap_or_default();
+        let git: String = self.get_attribute("git").unwrap_or_default();
+        let clone: String = self.get_attribute("clone").unwrap_or_default();
+        let build: String = self.get_attribute("build").unwrap_or_default();
+        let test: String = self.get_attribute("test").unwrap_or_default();
+        let release: String = self.get_attribute("release").unwrap_or_default();
+        let clean: String = self.get_attribute("clean").unwrap_or_default();
+        let terminal: String = self.get_attribute("terminal").unwrap_or_default();
+
+        let configured_task_names = tasks
+            .iter()
+            .filter_map(|task| match task {
+                TaskAttribute::Name(name) => {
+                    let value = name.trim();
+                    if value.is_empty() {
+                        None
+                    } else {
+                        Some(value.to_string())
+                    }
+                }
+                TaskAttribute::Detailed(details) => details
+                    .task
+                    .as_deref()
+                    .or(details.label.as_deref())
+                    .map(str::trim)
+                    .filter(|value| !value.is_empty())
+                    .map(ToString::to_string),
+            })
+            .collect::<Vec<String>>();
+
+        let task_list_position = |key: &str, label: &str| -> Option<i32> {
+            let key_lc = key.trim().to_ascii_lowercase();
+            let label_lc = label.trim().to_ascii_lowercase();
+
+            configured_task_names
+                .iter()
+                .position(|task| {
+                    let task_lc = task.trim().to_ascii_lowercase();
+                    task_lc == key_lc || task_lc == label_lc
+                })
+                .map(|index| (index as i32) + 1)
+        };
+
+        let resolved_order = |key: &str, label: &str, fallback: i32| -> i32 {
+            order
+                .get(key)
+                .copied()
+                .or_else(|| order.get(label).copied())
+                .or_else(|| task_list_position(key, label))
+                .unwrap_or(fallback)
+        };
+
+        let mut ordered_tasks = Vec::<(String, String, i32, usize)>::new();
+
+        let mut add_builtin =
+            |label: &str, key: &str, command: &str, fallback: i32, index: usize| {
+                if command.trim().is_empty() {
+                    return;
+                }
+
+                ordered_tasks.push((
+                    label.to_string(),
+                    key.to_string(),
+                    resolved_order(key, label, fallback),
+                    index,
+                ));
+            };
+
+        add_builtin("Git Fetch", "git", git.as_str(), 1, 0);
+        add_builtin("Clone", "clone", clone.as_str(), 2, 1);
+        add_builtin("Build", "build", build.as_str(), 3, 2);
+        add_builtin("Test", "test", test.as_str(), 4, 3);
+        add_builtin("Release", "release", release.as_str(), 5, 4);
+        add_builtin("Clean", "clean", clean.as_str(), 6, 5);
+        add_builtin("Terminal", "terminal", terminal.as_str(), 7, 6);
+
+        let mut custom_index = 0usize;
+        for custom in custom_actions.iter() {
+            let label = custom.label.as_deref().map(str::trim).unwrap_or_default();
+            let command = custom.command.as_deref().map(str::trim).unwrap_or_default();
+
+            if label.is_empty() || command.is_empty() {
+                continue;
+            }
+
+            let fallback = 100 + custom_index as i32;
+            ordered_tasks.push((
+                label.to_string(),
+                label.to_string(),
+                resolved_order(label, label, fallback),
+                7 + custom_index,
+            ));
+            custom_index += 1;
+        }
+
+        ordered_tasks.sort_by(
+            |(_, key_a, order_a, index_a), (_, key_b, order_b, index_b)| {
+                order_a
+                    .cmp(order_b)
+                    .then(index_a.cmp(index_b))
+                    .then(key_a.cmp(key_b))
+            },
+        );
 
         let content = html! {{
             <p>$project $branch</p>
@@ -132,74 +276,54 @@ impl ProjectStatusComponent {
                 <button class="project-action-button" onclick="runAll('$project')">Run</button>
 
                 <rust>
-                    let attr: String = self.get_attribute("git").unwrap_or_default();
+                    for task in ordered_tasks.iter() {
+                        let task_label = task.0.as_str();
+                        let task_key = task.1.trim().to_ascii_lowercase();
 
-                    if !attr.is_empty() {
-                        <markup>
-                            <button class="project-action-button" onclick="goTo('/fetch?project=$project')">Git Fetch</button>
-                        </markup>
-                    }
-                </rust>
-
-                <rust>
-                    let attr: String = self.get_attribute("build").unwrap_or_default();
-
-                    if !attr.is_empty() {
-                        <markup>
-                            <button class="project-action-button" onclick="goTo('/build?project=$project')">Build</button>
-                        </markup>
-                    }
-                </rust>
-
-                <rust>
-                    let attr: String = self.get_attribute("test").unwrap_or_default();
-
-                    if !attr.is_empty() {
-                        <markup>
-                            <button class="project-action-button" onclick="goTo('/test?project=$project')">Test</button>
-                        </markup>
-                    }
-                </rust>
-
-                <rust>
-                    let attr: String = self.get_attribute("release").unwrap_or_default();
-
-                    if !attr.is_empty() {
-                        <markup>
-                            <button class="project-action-button" onclick="goTo('/release?project=$project')">Release</button>
-                        </markup>
-                    }
-                </rust>
-
-                <rust>
-                    let attr: String = self.get_attribute("clean").unwrap_or_default();
-
-                    if !attr.is_empty() {
-                        <markup>
-                            <button class="project-action-button" onclick="goTo('/clean?project=$project')">Clean</button>
-                        </markup>
-                    }
-                </rust>
-
-                <rust>
-                    let attr: String = self.get_attribute("terminal").unwrap_or_default();
-
-                    if !attr.is_empty() {
-                        <markup>
-                            <button class="project-action-button" onclick="goTo('/terminal?project=$project')">Terminal</button>
-                        </markup>
-                    }
-                </rust>
-
-                <rust>
-                    for custom in &custom_actions {
-                        if let Some(label) = custom.label.as_ref() {
-                            let label = label.trim();
-
-                            if !label.is_empty() {
+                        match task_key.as_str() {
+                            "git" => {
                                 <markup>
-                                    <button class="project-action-button" onclick="goTo('/custom?project=$(project)&custom_label=$label')">$label</button>
+                                    <button class="project-action-button" onclick="goTo('/fetch?project=$project')">Git Fetch</button>
                                 </markup>
+                            }
+                            "build" => {
+                                <markup>
+                                    <button class="project-action-button" onclick="goTo('/build?project=$project')">Build</button>
+                                </markup>
+                            }
+                            "test" => {
+                                <markup>
+                                    <button class="project-action-button" onclick="goTo('/test?project=$project')">Test</button>
+                                </markup>
+                            }
+                            "release" => {
+                                <markup>
+                                    <button class="project-action-button" onclick="goTo('/release?project=$project')">Release</button>
+                                </markup>
+                            }
+                            "clean" => {
+                                <markup>
+                                    <button class="project-action-button" onclick="goTo('/clean?project=$project')">Clean</button>
+                                </markup>
+                            }
+                            "terminal" => {
+                                <markup>
+                                    <button class="project-action-button" onclick="goTo('/terminal?project=$project')">Terminal</button>
+                                </markup>
+                            }
+                            "clone" => {
+                                <markup>
+                                    <button class="project-action-button" onclick="goTo('/clone?project=$project')">Clone</button>
+                                </markup>
+                            }
+                            _ => {
+                                let custom_label = task_label.trim();
+
+                                if !custom_label.is_empty() {
+                                    <markup>
+                                        <button class="project-action-button" onclick="goTo('/custom?project=$(project)&custom_label=$custom_label')">$custom_label</button>
+                                    </markup>
+                                }
                             }
                         }
                     }

@@ -1263,6 +1263,12 @@ fn command_to_executable(action: &Action) -> Option<CommandBuilder> {
         }
     };
 
+    if let Ok(config_json) = serde_json::from_str::<serde_json::Value>(&config_string)
+        && let Some(command) = find_task_command_in_json(&config_json, action.action.as_str())
+    {
+        return parse_command(Some(command), folder).ok();
+    }
+
     let config_commands: BuildCommands = match serde_json::from_str(&config_string) {
         Ok(config) => config,
         Err(err) => {
@@ -1282,6 +1288,32 @@ fn command_to_executable(action: &Action) -> Option<CommandBuilder> {
         _ => find_custom_command_by_label(&config_commands, action.action.as_str())
             .and_then(|command| parse_command(Some(command), folder).ok()),
     }
+}
+
+fn find_task_command_in_json(config_json: &serde_json::Value, task_name: &str) -> Option<String> {
+    let tasks = config_json.get("tasks")?.as_array()?;
+    let task_name = task_name.trim();
+
+    tasks.iter().find_map(|value| {
+        let map = value.as_object()?;
+        let task = map
+            .get("task")
+            .and_then(|value| value.as_str())
+            .or_else(|| map.get("label").and_then(|value| value.as_str()))
+            .or_else(|| map.get("name").and_then(|value| value.as_str()))
+            .or_else(|| map.get("key").and_then(|value| value.as_str()))
+            .or_else(|| map.get("action").and_then(|value| value.as_str()))?
+            .trim();
+
+        if task != task_name {
+            return None;
+        }
+
+        map.get("command")
+            .and_then(|value| value.as_str())
+            .map(|value| value.trim().to_string())
+            .filter(|value| !value.is_empty())
+    })
 }
 
 fn find_custom_command_by_label(config_commands: &BuildCommands, label: &str) -> Option<String> {
@@ -1563,6 +1595,11 @@ async fn start_detached_action(
     };
 
     broadcast_task_status(&stdout_tx, "RUNNING");
+    broadcast_task_stdout(
+        task_key.as_str(),
+        &stdout_tx,
+        format!("Starting '{}' task...\n", action_name),
+    );
 
     drop(pty_pair.slave);
 
@@ -1748,16 +1785,17 @@ fn append_task_history_blocking(task_key: &str, output: &str) {
         return;
     }
 
-    let mut app = APP_DATA.blocking_write();
-    app.append_task_history(task_key, output.as_bytes());
+    if let Ok(mut app) = APP_DATA.try_write() {
+        app.append_task_history(task_key, output.as_bytes());
+    }
 }
 
 fn task_last_activity_blocking(task_key: &str) -> Option<Arc<AtomicU64>> {
-    APP_DATA
-        .blocking_read()
-        .tasks
-        .get(task_key)
-        .map(|task| task.last_activity.clone())
+    APP_DATA.try_read().ok().and_then(|app| {
+        app.tasks
+            .get(task_key)
+            .map(|task| task.last_activity.clone())
+    })
 }
 
 fn broadcast_task_stdout(task_key: &str, stdout_tx: &broadcast::Sender<String>, line: String) {
@@ -1844,6 +1882,13 @@ async fn start_build(
     task_key: String,
 ) {
     send_status(session, "RUNNING").await;
+    send_stdout_for_task(
+        session,
+        task_key.as_str(),
+        format!("Starting '{}' task...\n", action.action).as_str(),
+    )
+    .await;
+
     let pty_system = native_pty_system();
 
     let rows = 30u16;

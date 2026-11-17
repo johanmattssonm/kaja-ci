@@ -169,6 +169,33 @@ button:hover {
     outline-offset: 2px;
 }
 
+.task-order-list {
+    display: flex;
+    flex-direction: column;
+}
+
+.task-order-row {
+    margin: 0 0 12px;
+}
+
+.task-command-input-row {
+    display: grid;
+    grid-template-columns: 1fr 90px auto auto;
+    gap: 6px;
+    align-items: center;
+}
+
+.task-order-input {
+    width: 90px;
+    text-align: center;
+}
+
+.task-order-button {
+    margin-top: 0;
+    width: 42px;
+    padding: 8px 10px;
+}
+
 .custom-command-inputs {
     display: grid;
     gap: 6px;

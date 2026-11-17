@@ -46,7 +46,7 @@ pub async fn run_server() -> io::Result<()> {
             .service(branch::branch)
             .service(build::build)
             .service(fetch::fetch)
-            .service(settings::settings)
+            .service(settings::settings_page)
             .service(settings::save_settings)
             .service(settings::load_settings)
             .service(abort::abort)
