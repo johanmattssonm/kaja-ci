@@ -313,8 +313,10 @@ fn load_latest_raw_log(component_id: String, project: String, file: String) {
                 };
 
                 element.set_inner_html(rendered.as_str());
+                element.set_scroll_top(element.scroll_height());
             } else {
                 element.set_text_content(Some(output.as_str()));
+                element.set_scroll_top(element.scroll_height());
             }
         }
 
@@ -834,7 +836,13 @@ async fn connect_console_view(id: String, task_key: String) {
         }
     }
 
-    try_inner_text("#status", "Disconnected");
+    let task_exited = get_element_by_id(id.as_str())
+        .and_then(|component| component.get_attribute("task_exited"))
+        .is_some_and(|value| value == "true");
+
+    if !task_exited {
+        try_inner_text("#status", "Disconnected");
+    }
 }
 
 fn single_char_key(key: &str) -> Option<char> {
@@ -1164,7 +1172,7 @@ fn handle_status(component_id: &str, line: ActionResponse) {
             let _ = component.set_attribute("task_exited", "true");
         }
         "status: SUCCESS" => {
-            try_inner_text("#status", "Task Finished Succesfully");
+            try_inner_text("#status", "Task Finished Successfully");
             let _ = component.set_attribute("task_exited", "true");
 
             let action = component.get_attribute("action").unwrap_or_default();

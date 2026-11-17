@@ -428,18 +428,15 @@ fn task_rows_from_build_commands(build_commands: &BuildCommands) -> Vec<serde_js
 
     ordered_rows
         .into_iter()
-        .map(|(task_name, command, custom, order, _)| {
+        .map(|(task_name, command, custom, _order, _)| {
             if custom {
                 serde_json::json!({
-                    "custom": true,
                     "label": task_name,
-                    "order": order,
                     "command": command
                 })
             } else {
                 serde_json::json!({
                     "task": task_name,
-                    "order": order,
                     "command": command
                 })
             }

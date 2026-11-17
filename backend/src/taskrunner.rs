@@ -178,15 +178,8 @@ pub async fn run(params: web::Query<RunAllParams>) -> impl Responder {
     }
 
     actix_web::rt::spawn(async move {
-        let run_all_raw_file_name = Some(run_all_raw_file_name());
-
         for task_key in task_keys {
-            let should_continue = run_task_from_run_all(
-                project.as_str(),
-                task_key.as_str(),
-                run_all_raw_file_name.clone(),
-            )
-            .await;
+            let should_continue = run_task_from_run_all(project.as_str(), task_key.as_str()).await;
 
             if !should_continue {
                 return;
@@ -261,19 +254,9 @@ fn task_href(action: &str, project: &str) -> String {
     }
 }
 
-async fn run_task_from_run_all(
-    project: &str,
-    task_key: &str,
-    run_all_raw_file_name: Option<String>,
-) -> bool {
+async fn run_task_from_run_all(project: &str, task_key: &str) -> bool {
     let mut rx = task_status_channel().subscribe();
-    let task_result = start_run_task(
-        project.to_string(),
-        task_key.to_string(),
-        None,
-        run_all_raw_file_name,
-    )
-    .await;
+    let task_result = start_run_task(project.to_string(), task_key.to_string(), None, None).await;
 
     match task_result {
         Ok(started_key) => {
@@ -353,8 +336,4 @@ async fn append_task_started_log_line(started_task_key: &str, project: &str) {
 
 fn now_time_string() -> String {
     Local::now().format("%Y-%m-%d %H:%M:%S").to_string()
-}
-
-fn run_all_raw_file_name() -> String {
-    format!("run-all-{}.raw", Local::now().format("%Y%m%dT%H%M%S%.3f%z"))
 }
