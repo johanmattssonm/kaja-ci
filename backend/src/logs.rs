@@ -5,7 +5,7 @@ use kaja_html_macro::html;
 use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
 use std::ffi::OsStr;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
 use crate::app::{TaskHistoryMetadata, log_base_dir};
 
@@ -30,6 +30,16 @@ struct LatestLogResponse {
 
 #[actix_web::get("/log")]
 pub async fn log_page(params: web::Query<LogParams>) -> impl Responder {
+    let selected_project = params
+        .project
+        .clone()
+        .or_else(|| {
+            safe_history_file_name(params.file.as_deref())
+                .and_then(|file_name| metadata_for_raw_file(file_name.as_str()))
+                .map(|metadata| metadata.project)
+        })
+        .unwrap_or_default();
+
     let content = html! {{
         <!doctype html>
         <html lang="en">
@@ -46,8 +56,9 @@ pub async fn log_page(params: web::Query<LogParams>) -> impl Responder {
                     <a class="top-bar-link" href="/">Home</a>
                 </nav>
                 <console-component
-                    project="$(params.project.clone().unwrap_or_default())"
+                    project="$(selected_project)"
                     file="$(params.file.clone().unwrap_or_default())"
+                    log_action="$(params.action.clone().unwrap_or_default())"
                     action="log"
                 ></console-component>
             </body>
@@ -83,38 +94,87 @@ pub async fn latest_log(params: web::Query<LogParams>) -> impl Responder {
 
 #[actix_web::get("/log/raw")]
 pub async fn latest_log_raw(params: web::Query<LogParams>) -> impl Responder {
-    let raw_path = if let Some(file_name) = safe_history_file_name(params.file.as_deref()) {
-        log_base_dir().join(file_name)
-    } else {
-        let Some(project) = params.project.as_deref() else {
-            return HttpResponse::BadRequest()
+    if let Some(file_name) = safe_history_file_name(params.file.as_deref()) {
+        if let Some(metadata) = metadata_for_raw_file(file_name.as_str()) {
+            let action = params.action.as_deref().unwrap_or_default().trim();
+            let should_return_combined =
+                action == "run-all" || (action.is_empty() && metadata.action == "run-all");
+
+            if should_return_combined {
+                let body = combined_raw_log_for_run_all(&metadata);
+
+                if body.is_empty() {
+                    return HttpResponse::NotFound()
+                        .content_type(ContentType::plaintext())
+                        .body("No log history found.");
+                }
+
+                return HttpResponse::Ok()
+                    .content_type(ContentType::plaintext())
+                    .body(body);
+            }
+        }
+
+        let raw_path = log_base_dir().join(file_name);
+
+        return match std::fs::read(raw_path.as_path()) {
+            Ok(content) => HttpResponse::Ok()
                 .content_type(ContentType::plaintext())
-                .body("Missing query: file or project");
+                .body(content),
+            Err(err) => HttpResponse::InternalServerError()
+                .content_type(ContentType::plaintext())
+                .body(format!("Failed to read log file: {}", err)),
         };
+    }
 
-        let metadata = if let Some(action) = params.action.as_deref() {
-            latest_metadata_for_project_action(project, action)
-        } else {
-            latest_metadata_for_project(project)
-        };
+    let Some(project) = params.project.as_deref() else {
+        return HttpResponse::BadRequest()
+            .content_type(ContentType::plaintext())
+            .body("Missing query: file or project");
+    };
 
-        let Some(metadata) = metadata else {
+    if let Some(action) = params.action.as_deref() {
+        let Some(metadata) = latest_metadata_for_project_action(project, action) else {
             return HttpResponse::NotFound()
                 .content_type(ContentType::plaintext())
                 .body("No log history found.");
         };
 
-        PathBuf::from(metadata.raw_file)
-    };
+        if action.trim() == "run-all" {
+            let body = combined_raw_log_for_run_all(&metadata);
 
-    match std::fs::read(raw_path.as_path()) {
-        Ok(content) => HttpResponse::Ok()
-            .content_type(ContentType::plaintext())
-            .body(content),
-        Err(err) => HttpResponse::InternalServerError()
-            .content_type(ContentType::plaintext())
-            .body(format!("Failed to read log file: {}", err)),
+            if body.is_empty() {
+                return HttpResponse::NotFound()
+                    .content_type(ContentType::plaintext())
+                    .body("No log history found.");
+            }
+
+            return HttpResponse::Ok()
+                .content_type(ContentType::plaintext())
+                .body(body);
+        }
+
+        return match std::fs::read(metadata.raw_file.as_str()) {
+            Ok(content) => HttpResponse::Ok()
+                .content_type(ContentType::plaintext())
+                .body(content),
+            Err(err) => HttpResponse::InternalServerError()
+                .content_type(ContentType::plaintext())
+                .body(format!("Failed to read log file: {}", err)),
+        };
     }
+
+    let combined = combined_raw_log_for_project(project);
+
+    if combined.is_empty() {
+        return HttpResponse::NotFound()
+            .content_type(ContentType::plaintext())
+            .body("No log history found.");
+    }
+
+    HttpResponse::Ok()
+        .content_type(ContentType::plaintext())
+        .body(combined)
 }
 
 #[actix_web::get("/history")]
@@ -166,6 +226,7 @@ fn history_table(rows: &[HistoryRow]) -> String {
                 <tr>
                     <th>Timestamp</th>
                     <th>Project</th>
+                    <th>Task</th>
                     <th>Status</th>
                     <th>Log file</th>
                 </tr>
@@ -179,6 +240,7 @@ fn history_table(rows: &[HistoryRow]) -> String {
                             <tr>
                                 <td>$(row.timestamp)</td>
                                 <td>$(row.project)</td>
+                                <td>$(row.task)</td>
                                 <td>
                                     <rust>
                                         if status_class.is_empty() {
@@ -201,6 +263,7 @@ fn history_table(rows: &[HistoryRow]) -> String {
 struct HistoryRow {
     timestamp: String,
     project: String,
+    task: String,
     status: String,
     status_class: String,
     href: String,
@@ -218,7 +281,12 @@ fn history_rows(entries: &[TaskHistoryMetadata]) -> Vec<HistoryRow> {
             continue;
         }
 
-        let href = format!("/log?file={}", encode_query_component(raw_name.as_str()));
+        let mut href = format!("/log?file={}", encode_query_component(raw_name.as_str()));
+
+        if !item.action.trim().is_empty() {
+            href.push_str("&action=");
+            href.push_str(encode_query_component(item.action.as_str()).as_str());
+        }
 
         let timestamp = item
             .finished_at
@@ -239,6 +307,7 @@ fn history_rows(entries: &[TaskHistoryMetadata]) -> Vec<HistoryRow> {
         rows.push(HistoryRow {
             timestamp,
             project: item.project.clone(),
+            task: normalized_task_name(item.action.as_str(), item.task_key.as_str()),
             status: item.status.clone(),
             status_class,
             href,
@@ -287,6 +356,102 @@ fn metadata_for_project_action(project: &str, action: &str) -> Vec<TaskHistoryMe
 
     records.sort_by(|a, b| b.datestamp.cmp(&a.datestamp));
     records
+}
+
+fn combined_raw_log_for_project(project: &str) -> Vec<u8> {
+    let mut seen_raw_files = HashSet::new();
+    let mut combined = Vec::<u8>::new();
+
+    for metadata in metadata_for_project(Some(project)) {
+        if !seen_raw_files.insert(metadata.raw_file.clone()) {
+            continue;
+        }
+
+        let Ok(content) = std::fs::read(metadata.raw_file.as_str()) else {
+            continue;
+        };
+
+        append_combined_log_entry(&mut combined, &metadata, content.as_slice());
+    }
+
+    combined
+}
+
+fn combined_raw_log_for_run_all(run_all: &TaskHistoryMetadata) -> Vec<u8> {
+    let mut seen_raw_files = HashSet::new();
+    let mut combined = Vec::<u8>::new();
+
+    let started_at = parse_rfc3339(run_all.started_at.as_str());
+    let finished_at = run_all
+        .finished_at
+        .as_deref()
+        .and_then(parse_rfc3339)
+        .or_else(|| parse_rfc3339(run_all.started_at.as_str()));
+
+    let mut selected = metadata_for_project(Some(run_all.project.as_str()))
+        .into_iter()
+        .filter(|metadata| {
+            if !seen_raw_files.insert(metadata.raw_file.clone()) {
+                return false;
+            }
+
+            metadata.action != "run-all"
+                && is_within_run_all_window(metadata, started_at, finished_at)
+        })
+        .collect::<Vec<_>>();
+
+    selected.sort_by(|a, b| a.datestamp.cmp(&b.datestamp));
+
+    for metadata in selected {
+        let Ok(content) = std::fs::read(metadata.raw_file.as_str()) else {
+            continue;
+        };
+
+        append_combined_log_entry(&mut combined, &metadata, content.as_slice());
+    }
+
+    combined
+}
+
+fn append_combined_log_entry(target: &mut Vec<u8>, metadata: &TaskHistoryMetadata, content: &[u8]) {
+    if !target.is_empty() {
+        target.extend_from_slice(b"\n\n");
+    }
+
+    let header = format!(
+        "===== {} ({}) {} =====\n",
+        metadata.action, metadata.status, metadata.project
+    );
+    target.extend_from_slice(header.as_bytes());
+    target.extend_from_slice(content);
+}
+
+fn is_within_run_all_window(
+    metadata: &TaskHistoryMetadata,
+    started_at: Option<DateTime<chrono::FixedOffset>>,
+    finished_at: Option<DateTime<chrono::FixedOffset>>,
+) -> bool {
+    let Some(run_started_at) = started_at else {
+        return false;
+    };
+
+    let Some(task_started_at) = parse_rfc3339(metadata.started_at.as_str()) else {
+        return false;
+    };
+
+    if task_started_at < run_started_at {
+        return false;
+    }
+
+    if let Some(run_finished_at) = finished_at {
+        return task_started_at <= run_finished_at;
+    }
+
+    true
+}
+
+fn parse_rfc3339(value: &str) -> Option<DateTime<chrono::FixedOffset>> {
+    DateTime::parse_from_rfc3339(value).ok()
 }
 
 fn metadata_for_raw_file(target_raw_file_name: &str) -> Option<TaskHistoryMetadata> {
@@ -364,6 +529,21 @@ fn raw_file_name(raw_file: &str) -> &str {
         .or_else(|| raw_file.rsplit('/').next())
         .or_else(|| raw_file.rsplit('\\').next())
         .unwrap_or(raw_file)
+}
+
+fn normalized_task_name(action: &str, task_key: &str) -> String {
+    let action = action.trim();
+
+    if !action.is_empty() {
+        return action.to_string();
+    }
+
+    task_key
+        .split_once('-')
+        .map(|(name, _)| name)
+        .unwrap_or(task_key)
+        .trim()
+        .to_string()
 }
 
 fn format_local_time(input: &str) -> String {

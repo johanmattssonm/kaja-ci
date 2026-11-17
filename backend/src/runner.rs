@@ -853,6 +853,13 @@ mod tests {
     }
 
     #[test]
+    fn detects_shell_operators_in_commands() {
+        assert!(command_requires_shell("echo RELEASE && exit 1"));
+        assert!(command_requires_shell("echo ok | sed 's/o/O/'"));
+        assert!(!command_requires_shell("cargo test --release"));
+    }
+
+    #[test]
     fn non_terminal_detached_task_key_uses_default_shape() {
         assert_eq!(
             build_detached_task_key("build", "/tmp/project"),
@@ -1352,22 +1359,36 @@ fn should_force_ls_color(program: &str, args: &[String]) -> bool {
         .any(|arg| arg == "--color" || arg.starts_with("--color=") || arg == "-G")
 }
 
+fn command_requires_shell(command: &str) -> bool {
+    const SHELL_META: [&str; 8] = ["&&", "||", "|", ";", ">", "<", "$", "`"];
+    SHELL_META.iter().any(|token| command.contains(token))
+}
+
 fn parse_command(command: Option<String>, folder: &str) -> Result<CommandBuilder, String> {
     let command = command.ok_or_else(|| "No command".to_string())?;
 
-    let parts = shell_words::split(&command).map_err(|e| e.to_string())?;
-    let (program, args) = parts
-        .split_first()
-        .ok_or_else(|| "Empty command".to_string())?;
-    let mut cmd = CommandBuilder::new(program);
+    let mut cmd = if command_requires_shell(command.as_str()) {
+        let mut cmd = CommandBuilder::new("sh");
+        cmd.arg("-lc");
+        cmd.arg(command.as_str());
+        cmd
+    } else {
+        let parts = shell_words::split(&command).map_err(|e| e.to_string())?;
+        let (program, args) = parts
+            .split_first()
+            .ok_or_else(|| "Empty command".to_string())?;
+        let mut cmd = CommandBuilder::new(program);
 
-    for arg in args {
-        cmd.arg(arg);
-    }
+        for arg in args {
+            cmd.arg(arg);
+        }
 
-    if should_force_ls_color(program, args) {
-        cmd.arg("--color=always");
-    }
+        if should_force_ls_color(program, args) {
+            cmd.arg("--color=always");
+        }
+
+        cmd
+    };
 
     cmd.cwd(folder);
     apply_terminal_env(&mut cmd);

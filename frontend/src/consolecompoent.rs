@@ -22,6 +22,9 @@ struct Console {
     file: String,
 
     #[attribute]
+    log_action: String,
+
+    #[attribute]
     action: String,
 
     #[attribute]
@@ -52,6 +55,7 @@ impl Component for ConsoleComponent {
         let action: String = self.get_attribute("action").unwrap_or_default();
         let project: String = self.get_attribute("project").unwrap_or_default();
         let file: String = self.get_attribute("file").unwrap_or_default();
+        let log_action: String = self.get_attribute("log_action").unwrap_or_default();
 
         log!("Connected:", &id);
         self.render();
@@ -82,7 +86,7 @@ impl Component for ConsoleComponent {
             }
 
             setup_log_output_shortcuts(&id);
-            load_latest_raw_log(id, project, file);
+            load_latest_raw_log(id, project, file, log_action);
             return;
         }
 
@@ -185,9 +189,16 @@ impl ConsoleComponent {
         }
 
         let task_key = new_value.to_string();
+        try_inner_text("#status", "Connecting...");
+
+        let connection_id = js_sys::Date::now().to_string();
+
+        if let Some(component) = get_element_by_id(component_id.as_str()) {
+            let _ = component.set_attribute("connection_id", connection_id.as_str());
+        }
 
         spawn_local(async move {
-            connect_console_view(component_id, task_key).await;
+            connect_console_view(component_id, task_key, connection_id).await;
         });
     }
 
@@ -244,6 +255,8 @@ impl ConsoleComponent {
                     }
                 </rust>
             </pre>
+            <p>Copy: Ctrl+Shift C</p>
+            <p>Paste: Ctrl+Shift V</p>
         }};
 
         element.set_inner_html(content.as_str());
@@ -268,12 +281,28 @@ fn url_encode(value: &str) -> String {
     js_sys::encode_uri_component(value).into()
 }
 
-fn load_latest_raw_log(component_id: String, project: String, file: String) {
+fn load_latest_raw_log(component_id: String, project: String, file: String, log_action: String) {
     spawn_local(async move {
         let endpoint = if !file.is_empty() {
-            format!("/log/raw?file={}", url_encode(file.as_str()))
+            if log_action.trim().is_empty() {
+                format!("/log/raw?file={}", url_encode(file.as_str()))
+            } else {
+                format!(
+                    "/log/raw?file={}&action={}",
+                    url_encode(file.as_str()),
+                    url_encode(log_action.as_str())
+                )
+            }
         } else if !project.is_empty() {
-            format!("/log/raw?project={}", url_encode(project.as_str()))
+            if log_action.trim().is_empty() {
+                format!("/log/raw?project={}", url_encode(project.as_str()))
+            } else {
+                format!(
+                    "/log/raw?project={}&action={}",
+                    url_encode(project.as_str()),
+                    url_encode(log_action.as_str())
+                )
+            }
         } else {
             try_inner_text("#status", "No project or log file selected.");
             return;
@@ -729,7 +758,12 @@ async fn show_latest_history_for_action(action: &str, project: &str, component_i
         return false;
     };
 
-    load_latest_raw_log(component_id.to_string(), String::new(), raw_name);
+    load_latest_raw_log(
+        component_id.to_string(),
+        String::new(),
+        raw_name,
+        action.to_string(),
+    );
     true
 }
 
@@ -775,12 +809,25 @@ async fn start_and_connect_console_view_with_command(action: &str, project: &str
     focus_console_output(&id);
 }
 
-async fn connect_console_view(id: String, task_key: String) {
+fn is_active_console_connection(component_id: &str, task_key: &str, connection_id: &str) -> bool {
+    let Some(component) = get_element_by_id(component_id) else {
+        return false;
+    };
+
+    let active_task_key = component.get_attribute("task_key").unwrap_or_default();
+    let active_connection_id = component.get_attribute("connection_id").unwrap_or_default();
+
+    active_task_key == task_key && active_connection_id == connection_id
+}
+
+async fn connect_console_view(id: String, task_key: String, connection_id: String) {
     let ws = WebSocket::open("ws://127.0.0.1:2003/runner");
 
     if ws.is_err() {
         log!("Failed to open websocket");
-        try_inner_text("#status", "Disconnected");
+        if is_active_console_connection(id.as_str(), task_key.as_str(), connection_id.as_str()) {
+            try_inner_text("#status", "Disconnected");
+        }
         return;
     }
 
@@ -805,7 +852,7 @@ async fn connect_console_view(id: String, task_key: String) {
         folder: None,
         command: None,
         stdin: None,
-        task_key: Some(task_key),
+        task_key: Some(task_key.clone()),
     };
 
     let json_string = match serde_json::to_string(&attach_action) {
@@ -822,6 +869,10 @@ async fn connect_console_view(id: String, task_key: String) {
     }
 
     while let Some(message) = ws_read.next().await {
+        if !is_active_console_connection(id.as_str(), task_key.as_str(), connection_id.as_str()) {
+            break;
+        }
+
         match message {
             Ok(Message::Text(text)) => {
                 process_build_output(id.as_str(), text);
@@ -840,7 +891,9 @@ async fn connect_console_view(id: String, task_key: String) {
         .and_then(|component| component.get_attribute("task_exited"))
         .is_some_and(|value| value == "true");
 
-    if !task_exited {
+    if !task_exited
+        && is_active_console_connection(id.as_str(), task_key.as_str(), connection_id.as_str())
+    {
         try_inner_text("#status", "Disconnected");
     }
 }

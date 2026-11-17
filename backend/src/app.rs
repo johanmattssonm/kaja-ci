@@ -165,7 +165,6 @@ impl AppData {
         };
 
         let key = task_key.unwrap_or_else(|| format!("{}-{}", task_type, project_folder));
-        println!("Starting task, key: {}", key);
 
         self.task_history.insert(key.clone(), Vec::new());
 
@@ -247,8 +246,6 @@ impl AppData {
         key: &str,
         ok: Option<bool>,
     ) -> Result<(), String> {
-        println!("Dropping task, key: {}", key);
-
         let running_key = format!("{}-{}", self.running_task_name, self.running_project);
 
         let (status_action, status_project): (Option<String>, Option<String>) =

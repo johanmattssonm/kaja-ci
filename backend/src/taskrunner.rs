@@ -1,14 +1,17 @@
 use actix_web::http::header::ContentType;
 use actix_web::{Error, HttpRequest, HttpResponse, Responder, web};
 use actix_ws::{Message, handle};
-use chrono::Local;
+use chrono::{Local, SecondsFormat};
 use serde::{Deserialize, Serialize};
 
+use std::collections::HashSet;
+use std::fs::{self, OpenOptions};
+use std::io::Write;
 use std::path::PathBuf;
 use std::sync::{OnceLock, RwLock as StdRwLock};
 use tokio::sync::broadcast;
 
-use crate::app::APP_DATA;
+use crate::app::{TaskHistoryMetadata, log_base_dir};
 use crate::branch::current_branch;
 use crate::runner::{RunTaskError, start_run_task};
 
@@ -178,18 +181,86 @@ pub async fn run(params: web::Query<RunAllParams>) -> impl Responder {
     }
 
     actix_web::rt::spawn(async move {
+        let history = create_run_all_history(project.as_str());
+        let run_all_task_key = format!("run-all-{}", project);
+
+        append_run_all_history_line(
+            history.as_ref(),
+            format!(
+                "[{}] [run-all] started project: {}\n",
+                now_time_string(),
+                project
+            )
+            .as_str(),
+        );
+
         for task_key in task_keys {
+            println!("[run-all] starting task: {} project: {}", task_key, project);
+
+            append_run_all_history_line(
+                history.as_ref(),
+                format!(
+                    "[{}] [run-all] starting task: {} project: {}\n",
+                    now_time_string(),
+                    task_key,
+                    project
+                )
+                .as_str(),
+            );
+
             let should_continue = run_task_from_run_all(project.as_str(), task_key.as_str()).await;
 
             if !should_continue {
+                append_run_all_history_line(
+                    history.as_ref(),
+                    format!(
+                        "[{}] [run-all] completed task: {} status: failed project: {}\n",
+                        now_time_string(),
+                        task_key,
+                        project
+                    )
+                    .as_str(),
+                );
+
+                finish_run_all_history(history.as_ref(), false);
+                send_task_status_with_running_and_message(
+                    run_all_task_key.as_str(),
+                    false,
+                    Some("run-all"),
+                    Some(project.as_str()),
+                    false,
+                    Some("Run-all stopped after a failed task."),
+                );
                 return;
             }
+
+            append_run_all_history_line(
+                history.as_ref(),
+                format!(
+                    "[{}] [run-all] completed task: {} status: success project: {}\n",
+                    now_time_string(),
+                    task_key,
+                    project
+                )
+                .as_str(),
+            );
         }
 
+        append_run_all_history_line(
+            history.as_ref(),
+            format!(
+                "[{}] [run-all] completed project: {}\n",
+                now_time_string(),
+                project
+            )
+            .as_str(),
+        );
+        finish_run_all_history(history.as_ref(), true);
+
         send_task_status_with_running_and_message(
-            "all-done",
+            run_all_task_key.as_str(),
             true,
-            Some("log"),
+            Some("run-all"),
             Some(project.as_str()),
             false,
             None,
@@ -223,6 +294,42 @@ fn load_task_keys(project: &str) -> Vec<String> {
         .cloned()
         .unwrap_or_default();
 
+    let configured_task_keys = config_json
+        .get("tasks")
+        .and_then(|value| value.as_array())
+        .map(|rows| {
+            rows.iter()
+                .filter_map(|row| row.as_object())
+                .filter_map(|row| {
+                    let task_key = row
+                        .get("task")
+                        .and_then(|value| value.as_str())
+                        .or_else(|| row.get("label").and_then(|value| value.as_str()))
+                        .unwrap_or_default()
+                        .trim()
+                        .to_string();
+
+                    if task_key.is_empty() {
+                        return None;
+                    }
+
+                    let command = row
+                        .get("command")
+                        .and_then(|value| value.as_str())
+                        .unwrap_or_default()
+                        .trim()
+                        .to_string();
+
+                    if command.is_empty() {
+                        return None;
+                    }
+
+                    Some(task_key)
+                })
+                .collect::<HashSet<String>>()
+        })
+        .unwrap_or_default();
+
     let mut tasks = Vec::<String>::new();
     for value in run_all {
         let Some(task_key) = value.as_str() else {
@@ -230,7 +337,11 @@ fn load_task_keys(project: &str) -> Vec<String> {
         };
 
         let task_key = task_key.trim();
-        if task_key.is_empty() || tasks.iter().any(|existing| existing == task_key) {
+        if task_key.is_empty() {
+            continue;
+        }
+
+        if !configured_task_keys.is_empty() && !configured_task_keys.contains(task_key) {
             continue;
         }
 
@@ -249,6 +360,7 @@ fn task_href(action: &str, project: &str) -> String {
         "release" => format!("/release?project={project}"),
         "clean" => format!("/clean?project={project}"),
         "terminal" => format!("/terminal?project={project}"),
+        "run-all" => format!("/log?project={project}&action=run-all"),
         "log" => format!("/log?project={project}"),
         custom => format!("/custom?project={project}&custom_label={custom}"),
     }
@@ -299,8 +411,6 @@ async fn handle_started_task(
     task_key: &str,
     project: &str,
 ) -> bool {
-    append_task_started_log_line(started_key, task_key).await;
-
     send_task_status_with_running(started_key, true, Some(task_key), Some(project), true);
 
     while let Ok(payload) = rx.recv().await {
@@ -323,15 +433,98 @@ async fn handle_started_task(
     true
 }
 
-async fn append_task_started_log_line(started_task_key: &str, project: &str) {
-    let timestamp = now_time_string();
-    let task_name = started_task_key
-        .split_once('-')
-        .map_or(started_task_key, |(name, _)| name);
-    let line = format!("[{timestamp}] [run-all] starting task: {task_name} project: {project}\n");
+struct RunAllHistory {
+    datestamp: String,
+    task_key: String,
+    project: String,
+    started_at: String,
+    branch: String,
+    raw_path: PathBuf,
+    meta_path: PathBuf,
+}
 
-    let mut app = APP_DATA.write().await;
-    app.append_task_history(started_task_key, line.as_bytes());
+fn create_run_all_history(project: &str) -> Option<RunAllHistory> {
+    if project.trim().is_empty() {
+        return None;
+    }
+
+    let base_dir = log_base_dir();
+    if fs::create_dir_all(base_dir.as_path()).is_err() {
+        return None;
+    }
+
+    let datestamp = Local::now().format("%Y%m%dT%H%M%S%.3f%z").to_string();
+    let raw_path = base_dir.join(format!("{}.raw", datestamp));
+    let meta_path = base_dir.join(format!("{}.json", datestamp));
+    let started_at = Local::now().to_rfc3339_opts(SecondsFormat::Secs, false);
+    let task_key = format!("run-all-{project}");
+    let branch = current_branch(project).unwrap_or_default();
+
+    let history = RunAllHistory {
+        datestamp,
+        task_key,
+        project: project.to_string(),
+        started_at,
+        branch,
+        raw_path,
+        meta_path,
+    };
+
+    write_run_all_metadata(&history, "running", None);
+    Some(history)
+}
+
+fn append_run_all_history_line(history: Option<&RunAllHistory>, line: &str) {
+    let Some(history) = history else {
+        return;
+    };
+
+    let mut file = match OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(history.raw_path.as_path())
+    {
+        Ok(file) => file,
+        Err(_) => return,
+    };
+
+    let _ = file.write_all(line.as_bytes());
+}
+
+fn finish_run_all_history(history: Option<&RunAllHistory>, ok: bool) {
+    let Some(history) = history else {
+        return;
+    };
+
+    let finished_at = Local::now().to_rfc3339_opts(SecondsFormat::Secs, false);
+    let status = if ok { "success" } else { "fail" };
+    write_run_all_metadata(history, status, Some(finished_at));
+}
+
+impl RunAllHistory {
+    fn as_ref_metadata(&self, status: &str, finished_at: Option<String>) -> TaskHistoryMetadata {
+        TaskHistoryMetadata {
+            datestamp: self.datestamp.clone(),
+            task_key: self.task_key.clone(),
+            project: self.project.clone(),
+            action: "run-all".to_string(),
+            status: status.to_string(),
+            started_at: self.started_at.clone(),
+            finished_at,
+            raw_file: self.raw_path.to_string_lossy().to_string(),
+            branch: self.branch.clone(),
+        }
+    }
+}
+
+fn write_run_all_metadata(history: &RunAllHistory, status: &str, finished_at: Option<String>) {
+    let metadata = history.as_ref_metadata(status, finished_at);
+    let payload = match serde_json::to_vec_pretty(&metadata) {
+        Ok(payload) => payload,
+        Err(_) => return,
+    };
+
+    let _ = fs::write(history.meta_path.as_path(), payload);
 }
 
 fn now_time_string() -> String {
