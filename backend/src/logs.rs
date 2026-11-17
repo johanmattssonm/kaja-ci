@@ -41,6 +41,8 @@ pub async fn log_page(params: web::Query<LogParams>) -> impl Responder {
         })
         .unwrap_or_default();
 
+    let project = selected_project.clone();
+
     let content = html! {{
         <!doctype html>
         <html lang="en">
@@ -55,6 +57,7 @@ pub async fn log_page(params: web::Query<LogParams>) -> impl Responder {
             <body>
                 <nav class="top-bar" aria-label="Primary">
                     <a class="top-bar-link" href="/">Home</a>
+                    <a class="top-bar-link" href="/history?project=$(project)">History</a>
                 </nav>
                 <console-component
                     project="$(selected_project)"
