@@ -10,7 +10,7 @@ use gloo_net::{
 use kaja_web::prelude::*;
 use serde::Deserialize;
 use std::path::Path;
-use wasm_bindgen::{JsCast, prelude::Closure};
+use wasm_bindgen::{JsCast, JsValue, prelude::Closure};
 use wasm_bindgen_futures::{JsFuture, spawn_local};
 
 #[component("console-component")]
@@ -256,6 +256,13 @@ impl ConsoleComponent {
                     }
                 </rust>
             </pre>
+            <rust>
+                if action == "log" {
+                    <markup>
+                        <p><a href="#" onclick="exportLogPlainText(); return false;">Export as plain text</a></p>
+                    </markup>
+                }
+            </rust>
             <p>Copy: Ctrl+Shift C</p>
             <p>Paste: Ctrl+Shift V</p>
         }};
@@ -615,6 +622,90 @@ async fn connect_terminal(project: String) {
     }
 
     focus_console_output(&console_id);
+}
+
+#[callback("exportLogPlainText")]
+fn export_log_plain_text() {
+    let Some(console) = get_element("console-component") else {
+        log!("No console component found.");
+        return;
+    };
+
+    let component_id = console
+        .get_attribute("id")
+        .unwrap_or_else(|| "console-component".to_string());
+    let output_id = format!("{}-output", component_id);
+
+    let Some(output) = get_element_by_id(output_id.as_str()) else {
+        log!("No output box for log view component.");
+        return;
+    };
+
+    let text = output.text_content().unwrap_or_default();
+
+    if text.trim().is_empty() {
+        try_inner_text("#status", "No log output to export.");
+        return;
+    }
+
+    let Some(window) = web_sys::window() else {
+        log!("Failed to export plain text log: window unavailable.");
+        try_inner_text("#status", "Failed to export plain text log.");
+        return;
+    };
+
+    let Some(document) = window.document() else {
+        log!("Failed to export plain text log: document unavailable.");
+        try_inner_text("#status", "Failed to export plain text log.");
+        return;
+    };
+
+    let Some(body) = document.body() else {
+        log!("Failed to export plain text log: document.body unavailable.");
+        try_inner_text("#status", "Failed to export plain text log.");
+        return;
+    };
+
+    let parts = js_sys::Array::new();
+    parts.push(&JsValue::from_str(text.as_str()));
+
+    let blob_opts = web_sys::BlobPropertyBag::new();
+    blob_opts.set_type("text/plain;charset=utf-8");
+
+    let Ok(blob) = web_sys::Blob::new_with_str_sequence_and_options(&parts, &blob_opts) else {
+        log!("Failed to export plain text log: blob creation failed.");
+        try_inner_text("#status", "Failed to export plain text log.");
+        return;
+    };
+
+    let Ok(url) = web_sys::Url::create_object_url_with_blob(&blob) else {
+        log!("Failed to export plain text log: object URL creation failed.");
+        try_inner_text("#status", "Failed to export plain text log.");
+        return;
+    };
+
+    let result = (|| -> std::result::Result<(), JsValue> {
+        let anchor = document.create_element("a")?;
+        anchor.set_attribute("href", url.as_str())?;
+        anchor.set_attribute("download", "build.txt")?;
+        body.append_child(&anchor)?;
+
+        let anchor_html = anchor.dyn_into::<web_sys::HtmlElement>()?;
+        anchor_html.click();
+        let _ = body.remove_child(&anchor_html);
+
+        Ok(())
+    })();
+
+    let _ = web_sys::Url::revoke_object_url(url.as_str());
+
+    if result.is_err() {
+        log!("Failed to export plain text log.");
+        try_inner_text("#status", "Failed to export plain text log.");
+        return;
+    }
+
+    try_inner_text("#status", "Plain text log downloaded.");
 }
 
 #[callback("startTask")]
