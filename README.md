@@ -1,5 +1,7 @@
 # Kaja CI
 
+![Kaja CI](font/kaja-ci.svg)
+
 Kaja CI is a local CI tool for running project automation tasks (build, test, release, custom commands) from a web UI.
 
 It runs entirely on your machine:
