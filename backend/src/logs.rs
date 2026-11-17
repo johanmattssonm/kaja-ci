@@ -19,6 +19,7 @@ pub struct LogParams {
 #[derive(Deserialize)]
 pub struct HistoryParams {
     pub project: Option<String>,
+    pub page: Option<usize>,
 }
 
 #[derive(Serialize)]
@@ -177,10 +178,24 @@ pub async fn latest_log_raw(params: web::Query<LogParams>) -> impl Responder {
         .body(combined)
 }
 
+const HISTORY_PAGE_SIZE: usize = 25;
+
 #[actix_web::get("/history")]
 pub async fn history_page(params: web::Query<HistoryParams>) -> impl Responder {
     let entries = metadata_for_project(params.project.as_deref());
     let rows = history_rows(entries.as_slice());
+
+    let requested_page = params.page.unwrap_or(1).max(1);
+    let total_rows = rows.len();
+    let total_pages = total_rows.div_ceil(HISTORY_PAGE_SIZE).max(1);
+    let current_page = requested_page.min(total_pages);
+    let start = (current_page - 1) * HISTORY_PAGE_SIZE;
+    let end = (start + HISTORY_PAGE_SIZE).min(total_rows);
+    let visible_rows = if start < end {
+        &rows[start..end]
+    } else {
+        &rows[0..0]
+    };
 
     let content = html! {{
         <!doctype html>
@@ -208,7 +223,12 @@ pub async fn history_page(params: web::Query<HistoryParams>) -> impl Responder {
                         </rust>
                     </p>
 
-                    <include history_table(rows.as_slice()) />
+                    <include history_table(visible_rows) />
+                    <include history_pagination_controls(
+                        params.project.as_deref(),
+                        current_page,
+                        total_pages,
+                    ) />
                 </main>
             </body>
         </html>
@@ -268,6 +288,52 @@ struct HistoryRow {
     status_class: String,
     href: String,
     raw_name: String,
+}
+
+fn history_pagination_controls(
+    project: Option<&str>,
+    current_page: usize,
+    total_pages: usize,
+) -> String {
+    let prev_href = (current_page > 1).then(|| history_href(project, current_page - 1));
+    let next_href = (current_page < total_pages).then(|| history_href(project, current_page + 1));
+
+    html! {{
+        <nav aria-label="History pagination">
+            <p>Page $(current_page) of $(total_pages)</p>
+            <div>
+                <rust>
+                    if let Some(href) = prev_href.as_deref() {
+                        <markup><a class="top-bar-link" href="$(href)">Prev</a></markup>
+                    } else {
+                        <markup><span>Prev</span></markup>
+                    }
+                </rust>
+                <rust>
+                    if let Some(href) = next_href.as_deref() {
+                        <markup><a class="top-bar-link" href="$(href)">Next</a></markup>
+                    } else {
+                        <markup><span>Next</span></markup>
+                    }
+                </rust>
+            </div>
+        </nav>
+    }}
+}
+
+fn history_href(project: Option<&str>, page: usize) -> String {
+    let mut href = format!("/history?page={}", page.max(1));
+
+    if let Some(project) = project {
+        let project = project.trim();
+
+        if !project.is_empty() {
+            href.push_str("&project=");
+            href.push_str(encode_query_component(project).as_str());
+        }
+    }
+
+    href
 }
 
 fn history_rows(entries: &[TaskHistoryMetadata]) -> Vec<HistoryRow> {
