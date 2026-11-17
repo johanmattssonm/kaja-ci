@@ -17,6 +17,31 @@ project-status {
     margin-bottom: 2em;
 }
 
+.project-status-card {
+    background: linear-gradient(180deg, #2b2b2b 0%, #212121 100%);
+    border: 1px solid #3b3b3b;
+    border-radius: 12px;
+    box-shadow: 0 6px 18px rgba(0, 0, 0, 0.28);
+    padding: 14px;
+}
+
+.project-status-title {
+    margin: 0;
+    font-size: 1.05rem;
+    font-weight: 700;
+    color: #f3f6fb;
+}
+
+.project-status-branch {
+    margin: 4px 0 12px;
+    color: #c4cfdd;
+    font-size: 0.95rem;
+}
+
+.project-status-branch code {
+    color: #d8eaff;
+}
+
 .top-bar {
     width: min(1197px, 100%);
     margin: 0 auto 16px;

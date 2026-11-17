@@ -1531,6 +1531,23 @@ async fn check_requested_task_state(
     Ok(None)
 }
 
+async fn persist_detached_start_failure(
+    task_key: &str,
+    action_name: &str,
+    project_folder: &str,
+    raw_history_file_name: Option<String>,
+    message: &str,
+) {
+    let mut app = APP_DATA.write().await;
+    app.record_failed_task_start(
+        task_key,
+        action_name,
+        project_folder,
+        raw_history_file_name,
+        message.as_bytes(),
+    );
+}
+
 async fn start_detached_action(
     action_name: &str,
     project_folder: String,
@@ -1567,27 +1584,57 @@ async fn start_detached_action(
     let rows = 30u16;
     let cols = 120u16;
 
-    let pty_pair = pty_system
-        .openpty(PtySize {
-            rows,
-            cols,
-            pixel_width: 0,
-            pixel_height: 0,
-        })
-        .map_err(|err| RunTaskError::Internal(format!("failed to allocate PTY: {err}")))?;
+    let pty_pair = match pty_system.openpty(PtySize {
+        rows,
+        cols,
+        pixel_width: 0,
+        pixel_height: 0,
+    }) {
+        Ok(pair) => pair,
+        Err(err) => {
+            let message = format!("failed to allocate PTY: {err}\n");
+            persist_detached_start_failure(
+                requested_task_key.as_str(),
+                action_name.as_str(),
+                project_folder.as_str(),
+                raw_history_file_name.clone(),
+                message.as_str(),
+            )
+            .await;
+            return Err(RunTaskError::Internal(message.trim_end().to_string()));
+        }
+    };
 
-    let mut child = pty_pair
-        .slave
-        .spawn_command(cmd)
-        .map_err(|err| RunTaskError::Internal(format!("Failed to start command: {err}")))?;
+    let mut child = match pty_pair.slave.spawn_command(cmd) {
+        Ok(child) => child,
+        Err(err) => {
+            let message = format!("Failed to start command: {err}\n");
+            persist_detached_start_failure(
+                requested_task_key.as_str(),
+                action_name.as_str(),
+                project_folder.as_str(),
+                raw_history_file_name.clone(),
+                message.as_str(),
+            )
+            .await;
+            return Err(RunTaskError::Internal(message.trim_end().to_string()));
+        }
+    };
 
     let reader = match pty_pair.master.try_clone_reader() {
         Ok(reader) => reader,
         Err(err) => {
             let _ = child.kill();
-            return Err(RunTaskError::Internal(format!(
-                "failed to open PTY reader: {err}"
-            )));
+            let message = format!("failed to open PTY reader: {err}\n");
+            persist_detached_start_failure(
+                requested_task_key.as_str(),
+                action_name.as_str(),
+                project_folder.as_str(),
+                raw_history_file_name.clone(),
+                message.as_str(),
+            )
+            .await;
+            return Err(RunTaskError::Internal(message.trim_end().to_string()));
         }
     };
 
@@ -1595,9 +1642,16 @@ async fn start_detached_action(
         Ok(writer) => writer,
         Err(err) => {
             let _ = child.kill();
-            return Err(RunTaskError::Internal(format!(
-                "failed to open PTY writer: {err}"
-            )));
+            let message = format!("failed to open PTY writer: {err}\n");
+            persist_detached_start_failure(
+                requested_task_key.as_str(),
+                action_name.as_str(),
+                project_folder.as_str(),
+                raw_history_file_name.clone(),
+                message.as_str(),
+            )
+            .await;
+            return Err(RunTaskError::Internal(message.trim_end().to_string()));
         }
     };
 
@@ -1613,7 +1667,7 @@ async fn start_detached_action(
             Some(action_name.clone()),
             Some(project_folder.clone()),
             Some(requested_task_key.clone()),
-            raw_history_file_name,
+            raw_history_file_name.clone(),
             child.clone(),
             input_tx,
             stdout_tx.clone(),
@@ -1624,6 +1678,16 @@ async fn start_detached_action(
                 if let Ok(mut process) = child.write() {
                     let _ = process.kill();
                 }
+
+                let message = format!("{err}\n");
+                persist_detached_start_failure(
+                    requested_task_key.as_str(),
+                    action_name.as_str(),
+                    project_folder.as_str(),
+                    raw_history_file_name.clone(),
+                    message.as_str(),
+                )
+                .await;
 
                 return Err(RunTaskError::Internal(err));
             }
@@ -1939,7 +2003,12 @@ async fn start_build(
         Ok(pair) => pair,
         Err(err) => {
             send_status(session, "FAILED").await;
-            send_stdout(session, format!("failed to allocate PTY: {err}").as_str()).await;
+            send_stdout_for_task(
+                session,
+                task_key.as_str(),
+                format!("failed to allocate PTY: {err}\n").as_str(),
+            )
+            .await;
             return;
         }
     };
@@ -1947,7 +2016,13 @@ async fn start_build(
     let cmd = command_to_executable(&action);
 
     if cmd.is_none() {
-        println!("No command to execute.");
+        send_status(session, "FAILED").await;
+        send_stdout_for_task(
+            session,
+            task_key.as_str(),
+            format!("No command configured for action '{}'.\n", action.action).as_str(),
+        )
+        .await;
         return;
     }
 
@@ -1957,9 +2032,10 @@ async fn start_build(
         Ok(child) => child,
         Err(err) => {
             send_status(session, "FAILED").await;
-            send_stdout(
+            send_stdout_for_task(
                 session,
-                format!("failed to start build command in: {err}").as_str(),
+                task_key.as_str(),
+                format!("Failed to start command: {err}\n").as_str(),
             )
             .await;
             return;

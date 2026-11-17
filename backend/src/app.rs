@@ -362,6 +362,36 @@ impl AppData {
         }
     }
 
+    pub fn record_failed_task_start(
+        &mut self,
+        task_key: &str,
+        action: &str,
+        project: &str,
+        raw_history_file_name: Option<String>,
+        output: &[u8],
+    ) {
+        if output.is_empty() {
+            return;
+        }
+
+        self.task_history
+            .entry(task_key.to_string())
+            .or_default()
+            .extend_from_slice(output);
+
+        if let Some(files) = create_history_files(task_key, action, project, raw_history_file_name)
+        {
+            append_output_to_raw_file(files.raw_path.as_path(), output);
+
+            if let Some(metadata) =
+                write_task_history_completion(Some(&files), task_key, action, project, false)
+            {
+                self.task_history_metadata
+                    .insert(task_key.to_string(), metadata);
+            }
+        }
+    }
+
     pub fn task_history(&self, key: &str) -> Option<Vec<u8>> {
         if let Some(history) = self.task_history.get(key) {
             return Some(history.clone());

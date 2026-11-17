@@ -270,9 +270,11 @@ impl ProjectStatusComponent {
         );
 
         let content = html! {{
-            <p>$project $branch</p>
-            <build-status project="$project"></build-status>
-            <div class="project-actions">
+            <div class="project-status-card">
+                <p class="project-status-title">$project</p>
+                <p class="project-status-branch">Branch: <code>$branch</code></p>
+                <build-status project="$project"></build-status>
+                <div class="project-actions">
                 <button class="project-action-button" onclick="runAll('$project')">Run</button>
 
                 <rust>
@@ -329,8 +331,9 @@ impl ProjectStatusComponent {
                     }
                 </rust>
 
-                <button class="project-action-button" onclick="goTo('/settings?project=$project')">Settings</button>
-                <button class="project-action-button" onclick="goTo('/history?project=$project')">History</button>
+                    <button class="project-action-button" onclick="goTo('/settings?project=$project')">Settings</button>
+                    <button class="project-action-button" onclick="goTo('/history?project=$project')">History</button>
+                </div>
             </div>
         }};
 
