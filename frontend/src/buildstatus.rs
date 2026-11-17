@@ -501,7 +501,7 @@ fn render_status(id: &str, href: &str, label: &str) {
     };
 
     if label.trim().is_empty() {
-        element.set_inner_html("");
+        element.set_inner_html("&nbsp;");
         return;
     }
 

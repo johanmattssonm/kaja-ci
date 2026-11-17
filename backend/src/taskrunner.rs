@@ -8,7 +8,7 @@ use std::collections::HashSet;
 use std::fs::{self, OpenOptions};
 use std::io::Write;
 use std::path::PathBuf;
-use std::sync::{OnceLock, RwLock as StdRwLock};
+use std::sync::{Mutex, OnceLock, RwLock as StdRwLock};
 use tokio::sync::broadcast;
 
 use crate::app::{TaskHistoryMetadata, log_base_dir};
@@ -35,6 +35,7 @@ pub struct TaskRunningStatus {
 
 static TASK_STATUS_TX: OnceLock<broadcast::Sender<String>> = OnceLock::new();
 static LAST_TASK_STATUS: OnceLock<StdRwLock<Option<String>>> = OnceLock::new();
+static RUN_ALL_RUNNING_PROJECTS: OnceLock<Mutex<HashSet<String>>> = OnceLock::new();
 
 fn task_status_channel() -> &'static broadcast::Sender<String> {
     TASK_STATUS_TX.get_or_init(|| {
@@ -45,6 +46,39 @@ fn task_status_channel() -> &'static broadcast::Sender<String> {
 
 fn last_task_status() -> &'static StdRwLock<Option<String>> {
     LAST_TASK_STATUS.get_or_init(|| StdRwLock::new(None))
+}
+
+fn run_all_running_projects() -> &'static Mutex<HashSet<String>> {
+    RUN_ALL_RUNNING_PROJECTS.get_or_init(|| Mutex::new(HashSet::new()))
+}
+
+fn try_start_run_all(project: &str) -> bool {
+    if project.trim().is_empty() {
+        return false;
+    }
+
+    let Ok(mut running_projects) = run_all_running_projects().lock() else {
+        return false;
+    };
+
+    if running_projects.contains(project) {
+        return false;
+    }
+
+    running_projects.insert(project.to_string());
+    true
+}
+
+fn finish_run_all(project: &str) {
+    if project.trim().is_empty() {
+        return;
+    }
+
+    let Ok(mut running_projects) = run_all_running_projects().lock() else {
+        return;
+    };
+
+    running_projects.remove(project);
 }
 
 pub fn send_task_status(task_key: &str, ok: bool, action: Option<&str>, project: Option<&str>) {
@@ -168,9 +202,21 @@ pub async fn websocket(req: HttpRequest, body: web::Payload) -> Result<HttpRespo
 #[actix_web::get("/run-all")]
 pub async fn run(params: web::Query<RunAllParams>) -> impl Responder {
     let project = params.project.clone();
+
+    if !try_start_run_all(project.as_str()) {
+        return HttpResponse::Ok().content_type(ContentType::json()).body(
+            serde_json::json!({
+                "ok": false,
+                "message": "Run all is already running for this project."
+            })
+            .to_string(),
+        );
+    }
+
     let task_keys = load_task_keys(project.as_str());
 
     if task_keys.is_empty() {
+        finish_run_all(project.as_str());
         return HttpResponse::Ok().content_type(ContentType::json()).body(
             serde_json::json!({
                 "ok": false,
@@ -181,6 +227,20 @@ pub async fn run(params: web::Query<RunAllParams>) -> impl Responder {
     }
 
     actix_web::rt::spawn(async move {
+        struct RunAllProjectGuard {
+            project: String,
+        }
+
+        impl Drop for RunAllProjectGuard {
+            fn drop(&mut self) {
+                finish_run_all(self.project.as_str());
+            }
+        }
+
+        let _run_all_project_guard = RunAllProjectGuard {
+            project: project.clone(),
+        };
+
         let history = create_run_all_history(project.as_str());
         let run_all_task_key = format!("run-all-{}", project);
 
