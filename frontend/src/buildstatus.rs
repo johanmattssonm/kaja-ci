@@ -54,6 +54,8 @@ struct LatestLogResponse {
 struct LatestLogMetadata {
     status: String,
     finished_at: Option<String>,
+    #[serde(default)]
+    started_at: String,
     raw_file: String,
     #[serde(default)]
     branch: String,
@@ -344,71 +346,124 @@ fn load_latest_build_status(id: String, project: String) {
     }
 
     spawn_local(async move {
-        let endpoint = format!(
-            "/log/latest?project={}",
-            js_sys::encode_uri_component(project.as_str())
-        );
+        let encoded_project = js_sys::encode_uri_component(project.as_str()).to_string();
+        let run_all_endpoint = format!("/log/latest?project={}&action=run-all", encoded_project);
+        let endpoint = format!("/log/latest?project={}", encoded_project);
 
-        let Ok(response) = Request::get(endpoint.as_str()).send().await else {
-            return;
-        };
+        let run_all_metadata = fetch_latest_metadata(run_all_endpoint.as_str()).await;
+        let latest_metadata = fetch_latest_metadata(endpoint.as_str()).await;
 
-        let Ok(payload) = response.text().await else {
-            return;
-        };
-
-        let Ok(latest) = serde_json::from_str::<LatestLogResponse>(payload.as_str()) else {
-            return;
-        };
-
-        if !latest.found {
+        let Some(metadata) = select_latest_metadata(run_all_metadata, latest_metadata) else {
             render_status(id.as_str(), "", "");
             return;
-        }
-
-        let Some(metadata) = latest.metadata else {
-            return;
         };
 
-        let time_value = metadata.finished_at.unwrap_or_default();
-        let local_time = if time_value.is_empty() {
-            "".to_string()
-        } else {
-            local_time_label(time_value.as_str())
-        };
-
-        let branch = normalized_branch(metadata.branch.as_str());
-        let task = normalized_task(metadata.action.as_str(), metadata.task_key.as_str());
-
-        let label = if metadata.status == "success" {
-            format_status_label("done", branch.as_str(), task.as_str(), local_time.as_str())
-        } else {
-            format_status_label(
-                "failed",
-                branch.as_str(),
-                task.as_str(),
-                local_time.as_str(),
-            )
-        };
-
-        let raw_file_name = metadata
-            .raw_file
-            .rsplit('/')
-            .next()
-            .and_then(|value| value.rsplit('\\').next())
-            .unwrap_or(metadata.raw_file.as_str());
-
-        let href = if raw_file_name.ends_with(".raw") {
-            format!("/log?file={}", js_sys::encode_uri_component(raw_file_name))
-        } else {
-            format!(
-                "/log?project={}",
-                js_sys::encode_uri_component(project.as_str())
-            )
-        };
-
-        render_status(id.as_str(), href.as_str(), label.as_str());
+        render_status_from_metadata(id.as_str(), project.as_str(), metadata);
     });
+}
+
+fn select_latest_metadata(
+    run_all: Option<LatestLogMetadata>,
+    latest: Option<LatestLogMetadata>,
+) -> Option<LatestLogMetadata> {
+    match (run_all, latest) {
+        (Some(run_all), Some(latest)) => {
+            if run_all.status.trim().eq_ignore_ascii_case("running") {
+                return Some(run_all);
+            }
+
+            let run_all_time = metadata_time_ms(&run_all);
+            let latest_time = metadata_time_ms(&latest);
+
+            if run_all_time.is_finite() && latest_time.is_finite() {
+                if run_all_time >= latest_time {
+                    Some(run_all)
+                } else {
+                    Some(latest)
+                }
+            } else if run_all_time.is_finite() {
+                Some(run_all)
+            } else {
+                Some(latest)
+            }
+        }
+        (Some(run_all), None) => Some(run_all),
+        (None, Some(latest)) => Some(latest),
+        (None, None) => None,
+    }
+}
+
+fn metadata_time_ms(metadata: &LatestLogMetadata) -> f64 {
+    let value = metadata
+        .finished_at
+        .as_deref()
+        .unwrap_or(metadata.started_at.as_str());
+
+    if value.trim().is_empty() {
+        return f64::NAN;
+    }
+
+    Date::new(&value.into()).get_time()
+}
+
+async fn fetch_latest_metadata(endpoint: &str) -> Option<LatestLogMetadata> {
+    let Ok(response) = Request::get(endpoint).send().await else {
+        return None;
+    };
+
+    let Ok(payload) = response.text().await else {
+        return None;
+    };
+
+    let Ok(latest) = serde_json::from_str::<LatestLogResponse>(payload.as_str()) else {
+        return None;
+    };
+
+    if !latest.found {
+        return None;
+    }
+
+    latest.metadata
+}
+
+fn render_status_from_metadata(id: &str, project: &str, metadata: LatestLogMetadata) {
+    let time_value = metadata.finished_at.unwrap_or_default();
+    let local_time = if time_value.is_empty() {
+        "".to_string()
+    } else {
+        local_time_label(time_value.as_str())
+    };
+
+    let branch = normalized_branch(metadata.branch.as_str());
+    let task = normalized_task(metadata.action.as_str(), metadata.task_key.as_str());
+
+    let status_label = match metadata.status.trim().to_ascii_lowercase().as_str() {
+        "success" | "ok" | "done" => "done",
+        "running" => "running",
+        _ => "failed",
+    };
+
+    let label = format_status_label(
+        status_label,
+        branch.as_str(),
+        task.as_str(),
+        local_time.as_str(),
+    );
+
+    let raw_file_name = metadata
+        .raw_file
+        .rsplit('/')
+        .next()
+        .and_then(|value| value.rsplit('\\').next())
+        .unwrap_or(metadata.raw_file.as_str());
+
+    let href = if raw_file_name.ends_with(".raw") {
+        format!("/log?file={}", js_sys::encode_uri_component(raw_file_name))
+    } else {
+        format!("/log?project={}", js_sys::encode_uri_component(project))
+    };
+
+    render_status(id, href.as_str(), label.as_str());
 }
 
 fn normalized_branch(input: &str) -> String {

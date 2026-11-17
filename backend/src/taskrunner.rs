@@ -53,24 +53,20 @@ fn run_all_running_projects() -> &'static Mutex<HashSet<String>> {
 }
 
 fn try_start_run_all(project: &str) -> bool {
-    if project.trim().is_empty() {
+    let project = project.trim();
+    if project.is_empty() {
         return false;
     }
 
-    let Ok(mut running_projects) = run_all_running_projects().lock() else {
-        return false;
-    };
-
-    if running_projects.contains(project) {
-        return false;
-    }
-
-    running_projects.insert(project.to_string());
-    true
+    run_all_running_projects()
+        .lock()
+        .map(|mut running_projects| running_projects.insert(project.to_string()))
+        .unwrap_or(false)
 }
 
 fn finish_run_all(project: &str) {
-    if project.trim().is_empty() {
+    let project = project.trim();
+    if project.is_empty() {
         return;
     }
 
@@ -79,6 +75,18 @@ fn finish_run_all(project: &str) {
     };
 
     running_projects.remove(project);
+}
+
+fn is_run_all_running(project: &str) -> bool {
+    let project = project.trim();
+    if project.is_empty() {
+        return false;
+    }
+
+    run_all_running_projects()
+        .lock()
+        .map(|running_projects| running_projects.contains(project))
+        .unwrap_or(false)
 }
 
 pub fn send_task_status(task_key: &str, ok: bool, action: Option<&str>, project: Option<&str>) {
@@ -149,13 +157,38 @@ pub async fn websocket(req: HttpRequest, body: web::Payload) -> Result<HttpRespo
         .ok()
         .and_then(|status| status.clone());
 
+    let mut sent_initial_status = false;
+
     if let Some(current_status) = current_status {
         if requested_project.is_empty() {
             let _ = session.text(current_status).await;
-        } else if let Ok(status) = serde_json::from_str::<TaskRunningStatus>(&current_status) {
-            if status.project == requested_project {
-                let _ = session.text(current_status).await;
-            }
+            sent_initial_status = true;
+        } else if let Ok(status) = serde_json::from_str::<TaskRunningStatus>(&current_status)
+            && status.project == requested_project
+        {
+            let _ = session.text(current_status).await;
+            sent_initial_status = true;
+        }
+    }
+
+    if !requested_project.is_empty()
+        && !sent_initial_status
+        && is_run_all_running(requested_project.as_str())
+    {
+        let fallback_running_status = TaskRunningStatus {
+            ok: true,
+            running: true,
+            project: requested_project.clone(),
+            task_key: format!("run-all-{}", requested_project),
+            action: "run-all".to_string(),
+            time: now_time_string(),
+            href: task_href("run-all", requested_project.as_str()),
+            message: Some("Run-all is running.".to_string()),
+            branch: current_branch(requested_project.as_str()).unwrap_or_default(),
+        };
+
+        if let Ok(payload) = serde_json::to_string(&fallback_running_status) {
+            let _ = session.text(payload).await;
         }
     }
 
@@ -225,6 +258,16 @@ pub async fn run(params: web::Query<RunAllParams>) -> impl Responder {
             .to_string(),
         );
     }
+
+    let run_all_task_key = format!("run-all-{}", project);
+    send_task_status_with_running_and_message(
+        run_all_task_key.as_str(),
+        true,
+        Some("run-all"),
+        Some(project.as_str()),
+        true,
+        Some("Run-all started."),
+    );
 
     actix_web::rt::spawn(async move {
         struct RunAllProjectGuard {
