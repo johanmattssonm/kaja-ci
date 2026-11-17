@@ -30,6 +30,7 @@ fn frontend_pkg_dir() -> PathBuf {
 pub async fn run_server() -> io::Result<()> {
     settingsfile::ensure_kaja_ci_dirs_exist().map_err(io::Error::other)?;
     app::ensure_log_base_dir_exists()?;
+    taskrunner::start_scheduler();
 
     println!("Starting Kaja CI build server");
     println!("WebSocket server: ws://127.0.0.1:2003/runner");

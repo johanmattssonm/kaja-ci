@@ -1,18 +1,19 @@
 use actix_web::http::header::ContentType;
 use actix_web::{Error, HttpRequest, HttpResponse, Responder, web};
 use actix_ws::{Message, handle};
-use chrono::{Local, SecondsFormat};
+use chrono::{Datelike, Local, SecondsFormat, Timelike};
 use serde::{Deserialize, Serialize};
 
 use std::collections::HashSet;
 use std::fs::{self, OpenOptions};
 use std::io::Write;
 use std::path::PathBuf;
-use std::sync::{Mutex, OnceLock, RwLock as StdRwLock};
+use std::sync::{Mutex, Once, OnceLock, RwLock as StdRwLock};
 use tokio::sync::broadcast;
 
 use crate::app::{TaskHistoryMetadata, log_base_dir};
 use crate::branch::current_branch;
+use crate::clone;
 use crate::runner::{RunTaskError, start_run_task};
 
 #[derive(Deserialize)]
@@ -36,6 +37,9 @@ pub struct TaskRunningStatus {
 static TASK_STATUS_TX: OnceLock<broadcast::Sender<String>> = OnceLock::new();
 static LAST_TASK_STATUS: OnceLock<StdRwLock<Option<String>>> = OnceLock::new();
 static RUN_ALL_RUNNING_PROJECTS: OnceLock<Mutex<HashSet<String>>> = OnceLock::new();
+static SCHEDULER_LAST_KEYS: OnceLock<Mutex<HashSet<String>>> = OnceLock::new();
+static SCHEDULER_RELOAD_TX: OnceLock<broadcast::Sender<()>> = OnceLock::new();
+static START_SCHEDULER_ONCE: Once = Once::new();
 
 fn task_status_channel() -> &'static broadcast::Sender<String> {
     TASK_STATUS_TX.get_or_init(|| {
@@ -50,6 +54,180 @@ fn last_task_status() -> &'static StdRwLock<Option<String>> {
 
 fn run_all_running_projects() -> &'static Mutex<HashSet<String>> {
     RUN_ALL_RUNNING_PROJECTS.get_or_init(|| Mutex::new(HashSet::new()))
+}
+
+fn scheduler_last_keys() -> &'static Mutex<HashSet<String>> {
+    SCHEDULER_LAST_KEYS.get_or_init(|| Mutex::new(HashSet::new()))
+}
+
+fn scheduler_reload_channel() -> &'static broadcast::Sender<()> {
+    SCHEDULER_RELOAD_TX.get_or_init(|| {
+        let (tx, _) = broadcast::channel::<()>(16);
+        tx
+    })
+}
+
+pub fn notify_scheduler_reload() {
+    let _ = scheduler_reload_channel().send(());
+}
+
+fn duration_until_next_minute() -> std::time::Duration {
+    let now = Local::now();
+    let next_minute = now
+        .with_second(0)
+        .and_then(|value| value.with_nanosecond(0))
+        .map(|value| value + chrono::Duration::minutes(1));
+
+    next_minute
+        .and_then(|value| (value - now).to_std().ok())
+        .unwrap_or(std::time::Duration::from_secs(60))
+}
+
+pub fn start_scheduler() {
+    START_SCHEDULER_ONCE.call_once(|| {
+        actix_web::rt::spawn(async {
+            let mut reload_rx = scheduler_reload_channel().subscribe();
+
+            loop {
+                run_due_scheduled_runs_once().await;
+
+                tokio::select! {
+                    _ = tokio::time::sleep(duration_until_next_minute()) => {}
+                    recv = reload_rx.recv() => {
+                        match recv {
+                            Ok(()) => {}
+                            Err(broadcast::error::RecvError::Lagged(_)) => {}
+                            Err(broadcast::error::RecvError::Closed) => break,
+                        }
+                    }
+                }
+            }
+        });
+    });
+}
+
+async fn run_due_scheduled_runs_once() {
+    let settings = match clone::load_settings() {
+        Ok(settings) => settings,
+        Err(_) => return,
+    };
+
+    let now = Local::now();
+    let minute_key = now.format("%Y-%m-%d %H:%M").to_string();
+    let now_hhmm = now.format("%H:%M").to_string();
+    let now_day = now.day() as u8;
+
+    if let Ok(mut seen) = scheduler_last_keys().lock()
+        && seen.len() > 5_000
+    {
+        seen.clear();
+    }
+
+    let mut due_projects = Vec::<String>::new();
+
+    for project in settings.projects {
+        let scheduled = load_scheduled_run_rows(project.as_str());
+        for schedule in scheduled {
+            let frequency = schedule.frequency.to_lowercase();
+            let is_due = match frequency.as_str() {
+                "daily" => schedule.at == now_hhmm,
+                "monthly" => schedule.at == now_hhmm && schedule.day_of_month == Some(now_day),
+                _ => false,
+            };
+
+            if !is_due {
+                continue;
+            }
+
+            let trigger_key = format!(
+                "{}|{}|{}|{}|{}",
+                project,
+                frequency,
+                schedule.at,
+                schedule.day_of_month.unwrap_or(0),
+                minute_key
+            );
+
+            let should_trigger = scheduler_last_keys()
+                .lock()
+                .map(|mut seen| seen.insert(trigger_key))
+                .unwrap_or(false);
+
+            if should_trigger {
+                due_projects.push(project.clone());
+            }
+        }
+    }
+
+    if due_projects.is_empty() {
+        return;
+    }
+
+    due_projects.sort();
+    due_projects.dedup();
+
+    for project in due_projects {
+        run_all_for_project(project).await;
+    }
+}
+
+#[derive(Default)]
+struct ScheduledRunRow {
+    frequency: String,
+    at: String,
+    day_of_month: Option<u8>,
+}
+
+fn load_scheduled_run_rows(project: &str) -> Vec<ScheduledRunRow> {
+    let mut project_dir = PathBuf::from(project);
+    project_dir.push("ci.json");
+
+    let Ok(content) = std::fs::read_to_string(project_dir.as_path()) else {
+        return Vec::new();
+    };
+
+    let Ok(json) = serde_json::from_str::<serde_json::Value>(content.as_str()) else {
+        return Vec::new();
+    };
+
+    json.get("scheduled-run")
+        .and_then(|value| value.as_array())
+        .map(|items| {
+            items
+                .iter()
+                .filter_map(|item| {
+                    let map = item.as_object()?;
+                    let frequency = map
+                        .get("frequency")
+                        .and_then(|value| value.as_str())
+                        .unwrap_or_default()
+                        .trim()
+                        .to_string();
+                    let at = map
+                        .get("at")
+                        .and_then(|value| value.as_str())
+                        .unwrap_or_default()
+                        .trim()
+                        .to_string();
+                    let day_of_month = map
+                        .get("day_of_month")
+                        .and_then(|value| value.as_u64())
+                        .and_then(|value| u8::try_from(value).ok())
+                        .filter(|value| (1..=31).contains(value));
+
+                    if frequency.is_empty() || at.len() != 5 {
+                        return None;
+                    }
+
+                    Some(ScheduledRunRow {
+                        frequency,
+                        at,
+                        day_of_month,
+                    })
+                })
+                .collect::<Vec<ScheduledRunRow>>()
+        })
+        .unwrap_or_default()
 }
 
 fn try_start_run_all(project: &str) -> bool {
@@ -236,7 +414,7 @@ pub async fn websocket(req: HttpRequest, body: web::Payload) -> Result<HttpRespo
 pub async fn run(params: web::Query<RunAllParams>) -> impl Responder {
     let project = params.project.clone();
 
-    if !try_start_run_all(project.as_str()) {
+    if is_run_all_running(project.as_str()) {
         return HttpResponse::Ok().content_type(ContentType::json()).body(
             serde_json::json!({
                 "ok": false,
@@ -247,9 +425,7 @@ pub async fn run(params: web::Query<RunAllParams>) -> impl Responder {
     }
 
     let task_keys = load_task_keys(project.as_str());
-
     if task_keys.is_empty() {
-        finish_run_all(project.as_str());
         return HttpResponse::Ok().content_type(ContentType::json()).body(
             serde_json::json!({
                 "ok": false,
@@ -257,6 +433,43 @@ pub async fn run(params: web::Query<RunAllParams>) -> impl Responder {
             })
             .to_string(),
         );
+    }
+
+    actix_web::rt::spawn(async move {
+        run_all_for_project(project).await;
+    });
+
+    HttpResponse::Ok().content_type(ContentType::json()).body(
+        serde_json::json!({
+            "ok": true,
+            "message": "Started tasks in background."
+        })
+        .to_string(),
+    )
+}
+
+async fn run_all_for_project(project: String) -> bool {
+    if !try_start_run_all(project.as_str()) {
+        return false;
+    }
+
+    struct RunAllProjectGuard {
+        project: String,
+    }
+
+    impl Drop for RunAllProjectGuard {
+        fn drop(&mut self) {
+            finish_run_all(self.project.as_str());
+        }
+    }
+
+    let _run_all_project_guard = RunAllProjectGuard {
+        project: project.clone(),
+    };
+
+    let task_keys = load_task_keys(project.as_str());
+    if task_keys.is_empty() {
+        return false;
     }
 
     let run_all_task_key = format!("run-all-{}", project);
@@ -269,41 +482,39 @@ pub async fn run(params: web::Query<RunAllParams>) -> impl Responder {
         Some("Run-all started."),
     );
 
-    actix_web::rt::spawn(async move {
-        struct RunAllProjectGuard {
-            project: String,
-        }
+    let history = create_run_all_history(project.as_str());
 
-        impl Drop for RunAllProjectGuard {
-            fn drop(&mut self) {
-                finish_run_all(self.project.as_str());
-            }
-        }
+    append_run_all_history_line(
+        history.as_ref(),
+        format!(
+            "[{}] [run-all] started project: {}\n",
+            now_time_string(),
+            project
+        )
+        .as_str(),
+    );
 
-        let _run_all_project_guard = RunAllProjectGuard {
-            project: project.clone(),
-        };
-
-        let history = create_run_all_history(project.as_str());
-        let run_all_task_key = format!("run-all-{}", project);
+    for task_key in task_keys {
+        println!("[run-all] starting task: {} project: {}", task_key, project);
 
         append_run_all_history_line(
             history.as_ref(),
             format!(
-                "[{}] [run-all] started project: {}\n",
+                "[{}] [run-all] starting task: {} project: {}\n",
                 now_time_string(),
+                task_key,
                 project
             )
             .as_str(),
         );
 
-        for task_key in task_keys {
-            println!("[run-all] starting task: {} project: {}", task_key, project);
+        let should_continue = run_task_from_run_all(project.as_str(), task_key.as_str()).await;
 
+        if !should_continue {
             append_run_all_history_line(
                 history.as_ref(),
                 format!(
-                    "[{}] [run-all] starting task: {} project: {}\n",
+                    "[{}] [run-all] completed task: {} status: failed project: {}\n",
                     now_time_string(),
                     task_key,
                     project
@@ -311,72 +522,51 @@ pub async fn run(params: web::Query<RunAllParams>) -> impl Responder {
                 .as_str(),
             );
 
-            let should_continue = run_task_from_run_all(project.as_str(), task_key.as_str()).await;
-
-            if !should_continue {
-                append_run_all_history_line(
-                    history.as_ref(),
-                    format!(
-                        "[{}] [run-all] completed task: {} status: failed project: {}\n",
-                        now_time_string(),
-                        task_key,
-                        project
-                    )
-                    .as_str(),
-                );
-
-                finish_run_all_history(history.as_ref(), false);
-                send_task_status_with_running_and_message(
-                    run_all_task_key.as_str(),
-                    false,
-                    Some("run-all"),
-                    Some(project.as_str()),
-                    false,
-                    Some("Run-all stopped after a failed task."),
-                );
-                return;
-            }
-
-            append_run_all_history_line(
-                history.as_ref(),
-                format!(
-                    "[{}] [run-all] completed task: {} status: success project: {}\n",
-                    now_time_string(),
-                    task_key,
-                    project
-                )
-                .as_str(),
+            finish_run_all_history(history.as_ref(), false);
+            send_task_status_with_running_and_message(
+                run_all_task_key.as_str(),
+                false,
+                Some("run-all"),
+                Some(project.as_str()),
+                false,
+                Some("Run-all stopped after a failed task."),
             );
+            return false;
         }
 
         append_run_all_history_line(
             history.as_ref(),
             format!(
-                "[{}] [run-all] completed project: {}\n",
+                "[{}] [run-all] completed task: {} status: success project: {}\n",
                 now_time_string(),
+                task_key,
                 project
             )
             .as_str(),
         );
-        finish_run_all_history(history.as_ref(), true);
+    }
 
-        send_task_status_with_running_and_message(
-            run_all_task_key.as_str(),
-            true,
-            Some("run-all"),
-            Some(project.as_str()),
-            false,
-            None,
-        );
-    });
+    append_run_all_history_line(
+        history.as_ref(),
+        format!(
+            "[{}] [run-all] completed project: {}\n",
+            now_time_string(),
+            project
+        )
+        .as_str(),
+    );
+    finish_run_all_history(history.as_ref(), true);
 
-    HttpResponse::Ok().content_type(ContentType::json()).body(
-        serde_json::json!({
-            "ok": true,
-            "message": "Started tasks in background."
-        })
-        .to_string(),
-    )
+    send_task_status_with_running_and_message(
+        run_all_task_key.as_str(),
+        true,
+        Some("run-all"),
+        Some(project.as_str()),
+        false,
+        None,
+    );
+
+    true
 }
 
 fn load_task_keys(project: &str) -> Vec<String> {

@@ -89,6 +89,13 @@ pub struct CustomCommand {
     pub command: Option<String>,
 }
 
+#[derive(Debug, Default, Serialize, Deserialize, Clone)]
+pub struct ScheduledRun {
+    pub frequency: Option<String>,
+    pub at: Option<String>,
+    pub day_of_month: Option<u8>,
+}
+
 #[derive(Debug, Serialize, Deserialize)]
 pub struct BuildCommands {
     pub git: Option<String>,
@@ -99,6 +106,9 @@ pub struct BuildCommands {
     pub clean: Option<String>,
     pub terminal: Option<String>,
     pub custom_comands: Option<Vec<CustomCommand>>,
+    #[serde(default)]
+    #[serde(rename = "scheduled-run")]
+    pub scheduled_runs: Option<Vec<ScheduledRun>>,
     #[serde(default, deserialize_with = "deserialize_tasks_option")]
     pub tasks: Option<Vec<String>>,
     pub order: Option<HashMap<String, i32>>,
@@ -117,6 +127,7 @@ impl Default for BuildCommands {
             clean: None,
             terminal: Some("bash".to_string()),
             custom_comands: None,
+            scheduled_runs: None,
             tasks: None,
             order: None,
             run_all: None,

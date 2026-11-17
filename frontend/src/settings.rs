@@ -1,4 +1,4 @@
-use crate::rest::{BuildCommands, CustomCommand};
+use crate::rest::{BuildCommands, CustomCommand, ScheduledRun};
 
 use gloo_net::http::Request;
 use kaja_web::prelude::*;
@@ -27,6 +27,8 @@ struct Settings {
     pub terminal: String,
     #[attribute]
     pub custom: Vec<CustomCommand>,
+    #[attribute]
+    pub scheduled: Vec<ScheduledRun>,
     #[attribute]
     pub tasks: Vec<String>,
     #[attribute]
@@ -60,13 +62,13 @@ impl SettingsComponent {
 
         let project: String = self.get_attribute("project").unwrap_or_default();
         let git: String = self.get_attribute("git").unwrap_or_default();
-        let clone: String = self.get_attribute("clone").unwrap_or_default();
         let build: String = self.get_attribute("build").unwrap_or_default();
         let test: String = self.get_attribute("test").unwrap_or_default();
         let release: String = self.get_attribute("release").unwrap_or_default();
         let clean: String = self.get_attribute("clean").unwrap_or_default();
         let terminal: String = self.get_attribute("terminal").unwrap_or_default();
         let custom: Vec<CustomCommand> = self.get_attribute("custom").unwrap_or_default();
+        let scheduled: Vec<ScheduledRun> = self.get_attribute("scheduled").unwrap_or_default();
         let tasks: Vec<String> = self.get_attribute("tasks").unwrap_or_default();
         let order: HashMap<String, i32> = self.get_attribute("order").unwrap_or_default();
 
@@ -85,15 +87,13 @@ impl SettingsComponent {
         let has_explicit_order = |task_key: &str| -> bool { order.contains_key(task_key) };
 
         let git_order = task_order("git", 0);
-        let clone_order = task_order("clone", 1);
-        let build_order = task_order("build", 2);
-        let test_order = task_order("test", 3);
-        let release_order = task_order("release", 4);
-        let clean_order = task_order("clean", 5);
-        let terminal_order = task_order("terminal", 6);
+        let build_order = task_order("build", 1);
+        let test_order = task_order("test", 2);
+        let release_order = task_order("release", 3);
+        let clean_order = task_order("clean", 4);
+        let terminal_order = task_order("terminal", 5);
 
         let git_has_explicit_order = has_explicit_order("git");
-        let clone_has_explicit_order = has_explicit_order("clone");
         let build_has_explicit_order = has_explicit_order("build");
         let test_has_explicit_order = has_explicit_order("test");
         let release_has_explicit_order = has_explicit_order("release");
@@ -122,20 +122,6 @@ impl SettingsComponent {
                 </div>
             </div>
 
-            <div id="row-clone" class="task-order-row" style="order: $(clone_order);">
-                <div class="task-order-content">
-                    <div class="setting-row-label">
-                        <input id="default-clone" type="checkbox" class="setting-default-checkbox" />
-                        <label for="default-clone">Clone command</label>
-                    </div>
-                    <div class="task-command-input-row">
-                        <input id="clone" name="clone" type="text" value="$(clone)" />
-                        <input id="order-clone" class="task-order-input" type="number" value="$(clone_order)" oninput="setTaskOrder('$id', 'clone')" data-order="$(clone_order)" data-explicit-order="$(clone_has_explicit_order)" />
-                        <button class="task-order-button" type="button" onclick="moveTaskUp('$id', 'clone')">Up</button>
-                        <button class="task-order-button" type="button" onclick="moveTaskDown('$id', 'clone')">Down</button>
-                    </div>
-                </div>
-            </div>
 
             <div id="row-build" class="task-order-row" style="order: $(build_order);">
                 <div class="task-order-content">
@@ -225,7 +211,7 @@ impl SettingsComponent {
                     let default_id = format!("custom-default-{}", index);
 
                     <markup>
-                        <div id="row-$(command_id)" class="task-order-row" style="order: $(task_order(label.as_str(), 7 + index));">
+                        <div id="row-$(command_id)" class="task-order-row" style="order: $(task_order(label.as_str(), 6 + index));">
                             <div class="task-order-content">
                                 <div class="setting-row-label">
                                     <input id="$(default_id)" type="checkbox" class="setting-default-checkbox" />
@@ -233,7 +219,7 @@ impl SettingsComponent {
                                 </div>
                                 <div class="task-command-input-row">
                                     <input id="$(command_id)" name="$(command_id)" type="text" value="$(command)" />
-                                    <input id="order-$(command_id)" class="task-order-input" type="number" value="$(task_order(label.as_str(), 7 + index))" oninput="setTaskOrder('$id', '$command_id')" data-order="$(task_order(label.as_str(), 7 + index))" data-explicit-order="$(order.contains_key(label.as_str()))" />
+                                    <input id="order-$(command_id)" class="task-order-input" type="number" value="$(task_order(label.as_str(), 6 + index))" oninput="setTaskOrder('$id', '$command_id')" data-order="$(task_order(label.as_str(), 6 + index))" data-explicit-order="$(order.contains_key(label.as_str()))" />
                                     <button class="task-order-button" type="button" onclick="moveTaskUp('$id', '$command_id')">Up</button>
                                     <button class="task-order-button" type="button" onclick="moveTaskDown('$id', '$command_id')">Down</button>
                                 </div>
@@ -252,6 +238,29 @@ impl SettingsComponent {
                 </div>
                 <button onclick="addCustomCommand('$id')">Add Custom Command</button>
             </p>
+
+            <p>
+                <label for="scheduled-time">Scheduled Run (Daily at, 24h)</label>
+                <div class="custom-command-inputs">
+                    <input id="scheduled-time" name="scheduled-time" type="text" value="" placeholder="HH:MM" pattern="^([01][0-9]|2[0-3]):[0-5][0-9]$" title="Use 24-hour format: HH:MM" maxlength="5" />
+                </div>
+                <button onclick="addScheduledRun('$id')">Add Scheduled Run</button>
+            </p>
+
+            <div id="scheduled-run-list">
+                <rust>
+                    for (index, item) in scheduled.iter().enumerate() {
+                        let at = item.at.clone().unwrap_or_default();
+
+                        <markup>
+                            <div>
+                                <span>daily at $(at)</span>
+                                <button type="button" onclick="removeScheduledRun('$id', '$(index)')">Remove</button>
+                            </div>
+                        </markup>
+                    }
+                </rust>
+            </div>
 
             <button onclick="saveSettings('$id')">Save</button>
         }};
@@ -276,6 +285,83 @@ impl SettingsComponent {
 
         reorder_task_order_list();
     }
+}
+
+fn is_valid_24h_time(value: &str) -> bool {
+    let mut parts = value.split(':');
+
+    let Some(hour_str) = parts.next() else {
+        return false;
+    };
+    let Some(minute_str) = parts.next() else {
+        return false;
+    };
+
+    if parts.next().is_some() || hour_str.len() != 2 || minute_str.len() != 2 {
+        return false;
+    }
+
+    let Ok(hour) = hour_str.parse::<u8>() else {
+        return false;
+    };
+    let Ok(minute) = minute_str.parse::<u8>() else {
+        return false;
+    };
+
+    hour <= 23 && minute <= 59
+}
+
+#[callback("addScheduledRun")]
+async fn add_scheduled_run(id: String) {
+    let at = try_get_value("#scheduled-time").trim().to_string();
+
+    if at.is_empty() {
+        log!("Scheduled run requires a time.");
+        return;
+    }
+
+    if !is_valid_24h_time(at.as_str()) {
+        log!("Scheduled run time must use 24-hour format HH:MM.");
+        return;
+    }
+
+    let component = SettingsComponent::get_component(&id);
+
+    let Some(component) = component else {
+        log!("No component");
+        return;
+    };
+
+    {
+        let mut inner = component.borrow_mut();
+        inner.scheduled.push(ScheduledRun {
+            frequency: Some("daily".to_string()),
+            at: Some(at),
+            day_of_month: None,
+        });
+    }
+
+    component.render();
+}
+
+#[callback("removeScheduledRun")]
+fn remove_scheduled_run(id: String, index: String) {
+    let Ok(index) = index.parse::<usize>() else {
+        return;
+    };
+
+    let Some(component) = SettingsComponent::get_component(&id) else {
+        return;
+    };
+
+    {
+        let mut inner = component.borrow_mut();
+        if index < inner.scheduled.len() {
+            inner.scheduled.remove(index);
+        }
+    }
+
+    component.render();
 }
 
 #[callback("addCustomCommand")]
@@ -320,7 +406,7 @@ async fn save_settings(id: String) {
     };
 
     let git: String = try_get_value("#git");
-    let clone: String = try_get_value("#clone");
+    let clone: String = component.get_attribute("clone").unwrap_or_default();
     let build: String = try_get_value("#build");
     let test: String = try_get_value("#test");
     let release: String = try_get_value("#release");
@@ -339,16 +425,7 @@ async fn save_settings(id: String) {
         task_sequence += 1;
     }
 
-    let clone_order = try_get_i32_value("#order-clone").unwrap_or(2);
-    if try_has_explicit_order("#order-clone") {
-        order.insert("clone".to_string(), clone_order);
-    }
-    if try_is_checked("#default-clone") && !clone.trim().is_empty() {
-        ordered_tasks.push(("clone".to_string(), clone_order, task_sequence));
-        task_sequence += 1;
-    }
-
-    let build_order = try_get_i32_value("#order-build").unwrap_or(3);
+    let build_order = try_get_i32_value("#order-build").unwrap_or(2);
     if try_has_explicit_order("#order-build") {
         order.insert("build".to_string(), build_order);
     }
@@ -357,7 +434,7 @@ async fn save_settings(id: String) {
         task_sequence += 1;
     }
 
-    let test_order = try_get_i32_value("#order-test").unwrap_or(4);
+    let test_order = try_get_i32_value("#order-test").unwrap_or(3);
     if try_has_explicit_order("#order-test") {
         order.insert("test".to_string(), test_order);
     }
@@ -366,7 +443,7 @@ async fn save_settings(id: String) {
         task_sequence += 1;
     }
 
-    let release_order = try_get_i32_value("#order-release").unwrap_or(5);
+    let release_order = try_get_i32_value("#order-release").unwrap_or(4);
     if try_has_explicit_order("#order-release") {
         order.insert("release".to_string(), release_order);
     }
@@ -375,7 +452,7 @@ async fn save_settings(id: String) {
         task_sequence += 1;
     }
 
-    let clean_order = try_get_i32_value("#order-clean").unwrap_or(6);
+    let clean_order = try_get_i32_value("#order-clean").unwrap_or(5);
     if try_has_explicit_order("#order-clean") {
         order.insert("clean".to_string(), clean_order);
     }
@@ -384,7 +461,7 @@ async fn save_settings(id: String) {
         task_sequence += 1;
     }
 
-    let terminal_order = try_get_i32_value("#order-terminal").unwrap_or(7);
+    let terminal_order = try_get_i32_value("#order-terminal").unwrap_or(6);
     if try_has_explicit_order("#order-terminal") {
         order.insert("terminal".to_string(), terminal_order);
     }
@@ -392,6 +469,31 @@ async fn save_settings(id: String) {
         ordered_tasks.push(("terminal".to_string(), terminal_order, task_sequence));
         task_sequence += 1;
     }
+
+    let scheduled_runs = {
+        let mut inner = component.borrow_mut();
+
+        let runs = inner
+            .scheduled
+            .iter()
+            .filter_map(|item| {
+                let at = item.at.clone().unwrap_or_default().trim().to_string();
+
+                if at.is_empty() || !is_valid_24h_time(at.as_str()) {
+                    return None;
+                }
+
+                Some(ScheduledRun {
+                    frequency: Some("daily".to_string()),
+                    at: Some(at),
+                    day_of_month: None,
+                })
+            })
+            .collect::<Vec<ScheduledRun>>();
+
+        inner.scheduled = runs.clone();
+        runs
+    };
 
     let custom_commands = {
         let mut inner = component.borrow_mut();
@@ -458,6 +560,7 @@ async fn save_settings(id: String) {
         clean: Some(clean.clone()),
         terminal: Some(terminal.clone()),
         custom_comands: Some(custom_commands.clone()),
+        scheduled_runs: Some(scheduled_runs.clone()),
         tasks: Some(tasks.clone()),
         order: Some(order.clone()),
         run_all: Some(tasks.clone()),
@@ -478,6 +581,8 @@ async fn save_settings(id: String) {
                 serde_json::to_string(&custom_commands).unwrap_or_else(|_| "[]".to_string());
             let tasks_json = serde_json::to_string(&tasks).unwrap_or_else(|_| "[]".to_string());
             let order_json = serde_json::to_string(&order).unwrap_or_else(|_| "{}".to_string());
+            let scheduled_json =
+                serde_json::to_string(&scheduled_runs).unwrap_or_else(|_| "[]".to_string());
 
             let _ = element.set_attribute("git", git.as_str());
             let _ = element.set_attribute("clone", clone.as_str());
@@ -487,6 +592,7 @@ async fn save_settings(id: String) {
             let _ = element.set_attribute("clean", clean.as_str());
             let _ = element.set_attribute("terminal", terminal.as_str());
             let _ = element.set_attribute("custom", custom_json.as_str());
+            let _ = element.set_attribute("scheduled", scheduled_json.as_str());
             let _ = element.set_attribute("tasks", tasks_json.as_str());
             let _ = element.set_attribute("order", order_json.as_str());
         }

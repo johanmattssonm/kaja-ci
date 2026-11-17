@@ -3,6 +3,7 @@ use std::fs;
 use std::path::PathBuf;
 
 use crate::runner::ProjectGetParams;
+use crate::taskrunner;
 use actix_web::http::header::ContentType;
 use actix_web::{HttpResponse, Responder, web};
 use kaja_html_macro::html;
@@ -29,6 +30,9 @@ pub async fn settings_page(params: web::Query<ProjectGetParams>) -> impl Respond
     let tasks_json = serde_json::to_string(&tasks).unwrap_or_else(|_| "[]".to_string());
     let order_json = serde_json::to_string(&settings.order.clone().unwrap_or_default())
         .unwrap_or_else(|_| "{}".to_string());
+    let scheduled_json =
+        serde_json::to_string(&settings.scheduled_runs.clone().unwrap_or_default())
+            .unwrap_or_else(|_| "[]".to_string());
 
     let content = html! {{
         <!doctype html>
@@ -58,6 +62,7 @@ pub async fn settings_page(params: web::Query<ProjectGetParams>) -> impl Respond
                         clean="$(settings.clean.unwrap_or_default())"
                         terminal="$(settings.terminal.unwrap_or_default())"
                         custom="$(commands_json)"
+                        scheduled="$(scheduled_json)"
                         tasks="$(tasks_json)"
                         order="$(order_json)"
                     >
@@ -90,9 +95,11 @@ pub async fn save_settings(
         &order_map,
     );
     let task_rows = task_rows_from_build_commands(&build_commands);
+    let scheduled_runs = build_commands.scheduled_runs.clone().unwrap_or_default();
     let settings_json = serde_json::json!({
         "tasks": task_rows,
-        "run-all": run_all
+        "run-all": run_all,
+        "scheduled-run": scheduled_runs
     });
 
     let update_settings = serde_json::to_string_pretty(&settings_json);
@@ -122,6 +129,8 @@ pub async fn save_settings(
             .content_type(ContentType::json())
             .body("{ \"ok\": false, \"message\": \"Can't write settings file.\" }");
     }
+
+    taskrunner::notify_scheduler_reload();
 
     HttpResponse::Ok()
         .content_type(ContentType::json())
@@ -173,6 +182,8 @@ pub async fn load_settings(params: web::Query<ProjectGetParams>) -> impl Respond
             "Failed to write default settings to {:?}: {}",
             project_dir, err
         );
+    } else {
+        taskrunner::notify_scheduler_reload();
     }
 
     HttpResponse::Ok()
