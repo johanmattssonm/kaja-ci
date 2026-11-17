@@ -70,7 +70,9 @@ dependencies = [
  "kaja-web",
  "kaja-web-component",
  "serde",
+ "serde-wasm-bindgen 0.6.5",
  "serde_json",
+ "tauri-wasm",
  "wasm-bindgen",
  "wasm-bindgen-futures",
  "web-sys",
@@ -711,6 +713,19 @@ dependencies = [
  "proc-macro2",
  "quote",
  "unicode-ident",
+]
+
+[[package]]
+name = "tauri-wasm"
+version = "0.2.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "d2af91192dc064428d4514e028c02701f8583c2fbb11f4e314e332959bcd37f4"
+dependencies = [
+ "js-sys",
+ "serde",
+ "serde-wasm-bindgen 0.6.5",
+ "wasm-bindgen",
+ "wasm-bindgen-futures",
 ]
 
 [[package]]
