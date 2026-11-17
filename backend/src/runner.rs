@@ -1118,14 +1118,29 @@ async fn process_attach_action(
         return;
     }
 
-    let history = {
+    let (history, final_status) = {
         let app = APP_DATA.read().await;
-        app.task_history(task_key.as_str())
+        let history = app.task_history(task_key.as_str());
+        let final_status = app
+            .task_history_metadata
+            .get(task_key.as_str())
+            .and_then(|metadata| match metadata.status.as_str() {
+                "success" => Some("SUCCESS"),
+                "fail" | "failed" => Some("FAILED"),
+                "running" => Some("RUNNING"),
+                _ => None,
+            });
+
+        (history, final_status)
     };
 
     if let Some(history) = history.filter(|history| !history.is_empty()) {
         let history = String::from_utf8_lossy(&history);
         send_stdout(session, history.as_ref()).await;
+    }
+
+    if let Some(status) = final_status {
+        send_status(session, status).await;
     }
 }
 
