@@ -9,6 +9,7 @@ use gloo_net::{
 };
 use kaja_web::prelude::*;
 use serde::Deserialize;
+use std::path::Path;
 use wasm_bindgen::{JsCast, prelude::Closure};
 use wasm_bindgen_futures::{JsFuture, spawn_local};
 
@@ -34,6 +35,9 @@ struct Console {
 
     #[attribute]
     command: String,
+
+    #[attribute]
+    clone_target: String,
 
     #[attribute]
     auto_start: bool,
@@ -606,6 +610,19 @@ struct StatusResponse {
     task: String,
 }
 
+#[derive(Deserialize)]
+struct LatestLogMetadata {
+    action: String,
+    raw_file: String,
+}
+
+#[derive(Deserialize)]
+struct LatestLogResponse {
+    ok: bool,
+    found: bool,
+    metadata: Option<LatestLogMetadata>,
+}
+
 async fn fetch_running_builder_task_key(action: &str, project: &str) -> Option<String> {
     let response = Request::get("/status").send().await.ok()?;
     let body = response.text().await.ok()?;
@@ -659,7 +676,59 @@ async fn ensure_builder_task_connected(action: &str, project: &str) {
         return;
     }
 
+    if action != "clean" && show_latest_history_for_action(action, project).await {
+        return;
+    }
+
     start_and_connect_console_view(action, project).await;
+}
+
+fn raw_file_name(raw_file: &str) -> Option<String> {
+    let file_name = Path::new(raw_file).file_name()?.to_str()?.trim();
+
+    if file_name.is_empty() {
+        None
+    } else {
+        Some(file_name.to_string())
+    }
+}
+
+async fn show_latest_history_for_action(action: &str, project: &str) -> bool {
+    let endpoint = format!("/log/latest?project={}", url_encode(project));
+
+    let response = match Request::get(endpoint.as_str()).send().await {
+        Ok(response) => response,
+        Err(_) => return false,
+    };
+
+    let body = match response.text().await {
+        Ok(body) => body,
+        Err(_) => return false,
+    };
+
+    let payload = match serde_json::from_str::<LatestLogResponse>(body.as_str()) {
+        Ok(payload) => payload,
+        Err(_) => return false,
+    };
+
+    if !payload.ok || !payload.found {
+        return false;
+    }
+
+    let Some(metadata) = payload.metadata else {
+        return false;
+    };
+
+    if metadata.action != action {
+        return false;
+    }
+
+    let Some(raw_name) = raw_file_name(metadata.raw_file.as_str()) else {
+        return false;
+    };
+
+    load_latest_raw_log("console-component".to_string(), String::new(), raw_name);
+    true
 }
 
 async fn start_and_connect_console_view(action: &str, project: &str) {
@@ -1097,6 +1166,20 @@ fn handle_status(component_id: &str, line: ActionResponse) {
         "status: SUCCESS" => {
             try_inner_text("#status", "Task Finished Succesfully");
             let _ = component.set_attribute("task_exited", "true");
+
+            let action = component.get_attribute("action").unwrap_or_default();
+            if action == "clone" {
+                let clone_target = component.get_attribute("clone_target").unwrap_or_default();
+                if !clone_target.is_empty() {
+                    if let Some(window) = web_sys::window() {
+                        let settings_url = format!(
+                            "/settings?project={}",
+                            js_sys::encode_uri_component(clone_target.as_str())
+                        );
+                        let _ = window.location().set_href(settings_url.as_str());
+                    }
+                }
+            }
         }
         _ => {
             log!("Unknown status from runner:", status.as_str());

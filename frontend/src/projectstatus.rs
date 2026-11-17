@@ -91,11 +91,18 @@ impl Component for ProjectStatusComponent {
     }
 
     fn attribute_changed(&self, name: &str, _old_value: &str, _new_value: &str) {
-        if name != "project" && name != "custom" && name != "branch" {
-            return;
+        if name == "project"
+            || name == "custom"
+            || name == "branch"
+            || name == "git"
+            || name == "build"
+            || name == "test"
+            || name == "release"
+            || name == "clean"
+            || name == "terminal"
+        {
+            self.render();
         }
-
-        self.render();
     }
 }
 

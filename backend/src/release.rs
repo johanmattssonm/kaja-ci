@@ -20,7 +20,7 @@ pub async fn release(params: web::Query<ProjectGetParams>) -> impl Responder {
             <body>
                 <nav class="top-bar" aria-label="Primary">
                     <a class="top-bar-link" href="/">Home</a>
-                    <a class="top-bar-link" href="#" data-project="$(params.project)" data-action="release" onclick="startTask(this.dataset.project, this.dataset.action)">Run</a>
+                    <a class="top-bar-link" href="#" data-project="$(params.project)" data-action="release" onclick="startTask(this.dataset.project, this.dataset.action)">Rerun</a>
                     <a class="top-bar-link" href="#" data-project="$(params.project)" onclick="abort(this.dataset.project)">Abort</a>
                 </nav>
                 <console-component project="$(params.project)" action="release"></console-component>

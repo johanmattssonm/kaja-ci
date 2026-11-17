@@ -24,7 +24,7 @@ pub struct CustomCommand {
     pub command: Option<String>,
 }
 
-#[derive(Debug, Default, Serialize, Deserialize)]
+#[derive(Debug, Serialize, Deserialize)]
 pub struct BuildCommands {
     pub git: Option<String>,
     pub clone: Option<String>,
@@ -35,6 +35,22 @@ pub struct BuildCommands {
     pub terminal: Option<String>,
     pub custom_comands: Option<Vec<CustomCommand>>,
     pub tasks: Option<Vec<String>>,
+}
+
+impl Default for BuildCommands {
+    fn default() -> Self {
+        Self {
+            git: None,
+            clone: None,
+            build: None,
+            test: None,
+            release: None,
+            clean: None,
+            terminal: Some("bash".to_string()),
+            custom_comands: None,
+            tasks: None,
+        }
+    }
 }
 
 #[derive(Serialize, Clone, Debug)]

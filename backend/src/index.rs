@@ -1,8 +1,11 @@
 use actix_web::http::header::ContentType;
-use actix_web::{HttpResponse, Responder, web};
+use actix_web::{HttpResponse, Responder};
 use kaja_html_macro::html;
 
-use crate::clone::{CloneParams, clone_command_from_input, load_settings};
+use crate::clone::{
+    CloneParams, clone_command_from_input, clone_target_dir_from_command, load_settings,
+    save_settings,
+};
 use crate::settingsfile::kaja_ci_projects_dir;
 
 #[actix_web::get("/")]
@@ -10,7 +13,20 @@ pub async fn index() -> impl Responder {
     let settings = load_settings();
 
     let (projects, settings_error) = match settings {
-        Ok(settings) => (settings.projects, None),
+        Ok(mut settings) => {
+            let previous_len = settings.projects.len();
+            settings
+                .projects
+                .retain(|project| std::path::Path::new(project.as_str()).exists());
+
+            let save_error = if settings.projects.len() != previous_len {
+                save_settings(&settings).err()
+            } else {
+                None
+            };
+
+            (settings.projects, save_error)
+        }
         Err(err) => (Vec::new(), Some(err)),
     };
 
@@ -69,11 +85,12 @@ pub async fn index() -> impl Responder {
         .body(content)
 }
 
-fn clone_page(params: &CloneParams, compact: bool) -> HttpResponse {
+pub(crate) fn clone_page(params: &CloneParams, compact: bool) -> HttpResponse {
     let mut project = params.project.clone().unwrap_or_default();
     let mut success_message = String::new();
     let mut error_message = String::new();
     let mut clone_command = String::new();
+    let mut clone_target = String::new();
     let mut auto_start = false;
     let repo_input = params.repo.as_ref().or(params.clone_command.as_ref());
 
@@ -89,6 +106,15 @@ fn clone_page(params: &CloneParams, compact: bool) -> HttpResponse {
                 clone_command = command;
                 auto_start = true;
                 success_message = "Ready to run clone command".to_string();
+
+                if !project.is_empty() {
+                    let project_folder = std::path::Path::new(project.as_str());
+                    if let Ok(target_dir) =
+                        clone_target_dir_from_command(clone_command.as_str(), project_folder)
+                    {
+                        clone_target = target_dir.to_string_lossy().to_string();
+                    }
+                }
             }
             Err(err) => {
                 error_message = err;
@@ -119,7 +145,7 @@ fn clone_page(params: &CloneParams, compact: bool) -> HttpResponse {
                     <rust>
                         if !project.is_empty() {
                             <markup>
-                                <a class="top-bar-link" href="#" data-project="$project" data-action="clone" data-command="$clone_command" onclick="startTaskWithCommand(this.dataset.project, this.dataset.action, this.dataset.command)">Run</a>
+                                <a class="top-bar-link" href="#" data-project="$project" data-action="clone" data-command="$clone_command" onclick="startTaskWithCommand(this.dataset.project, this.dataset.action, this.dataset.command)">Rerun</a>
                                 <a class="top-bar-link" href="#" data-project="$project" onclick="abort(this.dataset.project)">Abort</a>
                             </markup>
                         }
@@ -145,7 +171,7 @@ fn clone_page(params: &CloneParams, compact: bool) -> HttpResponse {
                         }
                     </rust>
 
-                    <console-component project="$project" action="clone" command="$clone_command" auto_start="$auto_start"></console-component>
+                    <console-component project="$project" action="clone" command="$clone_command" clone_target="$clone_target" auto_start="$auto_start"></console-component>
                 </main>
             </body>
         </html>
@@ -154,14 +180,4 @@ fn clone_page(params: &CloneParams, compact: bool) -> HttpResponse {
     HttpResponse::Ok()
         .content_type(ContentType::html())
         .body(content)
-}
-
-#[actix_web::get("/clone")]
-pub async fn clone_handler(params: web::Query<CloneParams>) -> impl Responder {
-    clone_page(&params, false)
-}
-
-#[actix_web::get("/compact-clone")]
-pub async fn compact_clone_handler(params: web::Query<CloneParams>) -> impl Responder {
-    clone_page(&params, true)
 }

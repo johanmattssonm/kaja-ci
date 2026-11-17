@@ -1,8 +1,10 @@
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
+use actix_web::{Responder, web};
 use serde::Deserialize;
 
+use crate::index::clone_page;
 use crate::settingsfile::{
     AppSettings, kaja_ci_base_dir, kaja_ci_projects_dir, kaja_ci_settings_path,
 };
@@ -13,6 +15,16 @@ pub struct CloneParams {
     #[serde(rename = "clone-command")]
     pub clone_command: Option<String>,
     pub project: Option<String>,
+}
+
+#[actix_web::get("/clone")]
+pub async fn clone_handler(params: web::Query<CloneParams>) -> impl Responder {
+    clone_page(&params, false)
+}
+
+#[actix_web::get("/compact-clone")]
+pub async fn compact_clone_handler(params: web::Query<CloneParams>) -> impl Responder {
+    clone_page(&params, true)
 }
 
 pub fn load_settings() -> Result<AppSettings, String> {
