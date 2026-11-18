@@ -23,11 +23,7 @@ pub async fn settings_page(params: web::Query<ProjectGetParams>) -> impl Respond
 
     let commands_json = serde_json::to_string(&settings.custom_comands).unwrap();
     let default_tasks = vec!["git".to_string(), "build".to_string(), "test".to_string()];
-    let tasks = settings
-        .run_all
-        .clone()
-        .or(settings.tasks)
-        .unwrap_or(default_tasks);
+    let tasks = settings.tasks.clone().unwrap_or(default_tasks);
     let tasks_json = serde_json::to_string(&tasks).unwrap_or_else(|_| "[]".to_string());
     let order_json = serde_json::to_string(&settings.order.clone().unwrap_or_default())
         .unwrap_or_else(|_| "{}".to_string());
@@ -87,19 +83,11 @@ pub async fn save_settings(
     project_dir.push("ci.json");
 
     let order_map = build_commands.order.clone().unwrap_or_default();
-    let run_all = normalized_run_all(
-        build_commands
-            .run_all
-            .clone()
-            .or(build_commands.tasks.clone())
-            .unwrap_or_default(),
-        &order_map,
-    );
+    let _run_all = normalized_run_all(build_commands.tasks.clone().unwrap_or_default(), &order_map);
     let task_rows = task_rows_from_build_commands(&build_commands);
     let scheduled_runs = build_commands.scheduled_runs.clone().unwrap_or_default();
     let settings_json = serde_json::json!({
         "tasks": task_rows,
-        "run-all": run_all,
         "scheduled-run": scheduled_runs
     });
 
@@ -222,7 +210,8 @@ fn load_settings_for_ui(project_path: &std::path::Path) -> BuildCommands {
         return settings;
     };
 
-    let mut task_names = Vec::<String>::new();
+    let mut all_task_names = Vec::<String>::new();
+    let mut run_all_task_names = Vec::<String>::new();
     let mut order = HashMap::<String, i32>::new();
     let mut commands = HashMap::<String, String>::new();
 
@@ -249,8 +238,17 @@ fn load_settings_for_ui(project_path: &std::path::Path) -> BuildCommands {
             .and_then(|value| i32::try_from(value).ok())
             .unwrap_or((index as i32) + 1);
 
-        if !task_names.iter().any(|name| name == &task) {
-            task_names.push(task.clone());
+        if !all_task_names.iter().any(|name| name == &task) {
+            all_task_names.push(task.clone());
+        }
+
+        let include_in_run_all = map
+            .get("run-all")
+            .and_then(|value| value.as_bool())
+            .unwrap_or(false);
+
+        if include_in_run_all && !run_all_task_names.iter().any(|name| name == &task) {
+            run_all_task_names.push(task.clone());
         }
 
         order.insert(task.clone(), task_order);
@@ -288,7 +286,7 @@ fn load_settings_for_ui(project_path: &std::path::Path) -> BuildCommands {
     let built_in = [
         "git", "clone", "build", "test", "release", "clean", "terminal",
     ];
-    let derived_custom_commands = task_names
+    let derived_custom_commands = all_task_names
         .iter()
         .filter(|task| !built_in.contains(&task.as_str()))
         .filter_map(|task| {
@@ -351,16 +349,29 @@ fn load_settings_for_ui(project_path: &std::path::Path) -> BuildCommands {
     });
 
     settings.custom_comands = Some(custom_commands);
-    settings.tasks = Some(task_names);
-    settings.order = Some(order);
+    settings.tasks = Some(run_all_task_names);
+    settings.order = Some(order.clone());
 
     let run_all_missing = settings
-        .run_all
+        .tasks
         .as_ref()
         .map(|value| value.is_empty())
         .unwrap_or(true);
-    if run_all_missing {
-        settings.run_all = settings.tasks.clone();
+
+    if run_all_missing
+        && let Some(top_level_run_all) = config_json
+            .get("run-all")
+            .and_then(|value| value.as_array())
+    {
+        let fallback_tasks = normalized_run_all(
+            top_level_run_all
+                .iter()
+                .filter_map(|value| value.as_str().map(|value| value.to_string()))
+                .collect::<Vec<String>>(),
+            &order,
+        );
+
+        settings.tasks = Some(fallback_tasks);
     }
 
     settings
@@ -441,15 +452,23 @@ fn task_rows_from_build_commands(build_commands: &BuildCommands) -> Vec<serde_js
     ordered_rows
         .into_iter()
         .map(|(task_name, command, custom, _order, _)| {
+            let include_in_run_all = build_commands
+                .tasks
+                .as_ref()
+                .map(|tasks| tasks.iter().any(|task| task == &task_name))
+                .unwrap_or(false);
+
             if custom {
                 serde_json::json!({
                     "label": task_name,
-                    "command": command
+                    "command": command,
+                    "run-all": include_in_run_all
                 })
             } else {
                 serde_json::json!({
                     "task": task_name,
-                    "command": command
+                    "command": command,
+                    "run-all": include_in_run_all
                 })
             }
         })

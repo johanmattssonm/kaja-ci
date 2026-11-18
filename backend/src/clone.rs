@@ -107,31 +107,41 @@ pub fn default_ci_json_value() -> serde_json::Value {
         "tasks": [
             {
                 "command": "git fetch --all",
-                "task": "git"
+                "task": "git",
+                "run-all": true
             },
             {
                 "command": "",
-                "task": "build"
+                "task": "build",
+                "run-all": true
             },
             {
                 "command": "",
-                "task": "test"
+                "task": "test",
+                "run-all": true
             },
             {
                 "command": "",
-                "task": "release"
+                "task": "release",
+                "run-all": false
             },
             {
                 "command": "",
-                "task": "clean"
+                "task": "clean",
+                "run-all": false
             },
             {
                 "command": default_terminal_command(),
-                "task": "terminal"
+                "task": "terminal",
+                "run-all": false
             }
         ],
-        "run-all": ["git", "build", "test"],
-        "scheduled-run": []
+        "scheduled-run": [
+            {
+                "frequency": "daily",
+                "at": "21:00"
+            }
+        ]
     })
 }
 

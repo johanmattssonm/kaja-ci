@@ -113,8 +113,8 @@ impl SettingsComponent {
             <div id="row-git" class="task-order-row" style="order: $(git_order);">
                 <div class="task-order-content">
                     <div class="setting-row-label">
-                        <input id="default-git" type="checkbox" class="setting-default-checkbox" />
                         <label for="default-git">Git fetch command</label>
+                        <input id="default-git" type="checkbox" class="setting-default-checkbox" />
                     </div>
                     <div class="task-command-input-row">
                         <input id="git" name="git" type="text" value="$(git)" />
@@ -129,8 +129,8 @@ impl SettingsComponent {
             <div id="row-build" class="task-order-row" style="order: $(build_order);">
                 <div class="task-order-content">
                     <div class="setting-row-label">
+                        <label for="default-build">Build command, run by default: </label>
                         <input id="default-build" type="checkbox" class="setting-default-checkbox" />
-                        <label for="default-build">Build command</label>
                     </div>
                     <div class="task-command-input-row">
                         <input id="build" name="build" type="text" value="$(build)" />
@@ -144,8 +144,8 @@ impl SettingsComponent {
             <div id="row-test" class="task-order-row" style="order: $(test_order);">
                 <div class="task-order-content">
                     <div class="setting-row-label">
-                        <input id="default-test" type="checkbox" class="setting-default-checkbox" />
                         <label for="default-test">Test command</label>
+                        <input id="default-test" type="checkbox" class="setting-default-checkbox" />
                     </div>
                     <div class="task-command-input-row">
                         <input id="test" name="test" type="text" value="$(test)" />
@@ -159,8 +159,8 @@ impl SettingsComponent {
             <div id="row-release" class="task-order-row" style="order: $(release_order);">
                 <div class="task-order-content">
                     <div class="setting-row-label">
-                        <input id="default-release" type="checkbox" class="setting-default-checkbox" />
                         <label for="default-release">Release command</label>
+                        <input id="default-release" type="checkbox" class="setting-default-checkbox" />
                     </div>
                     <div class="task-command-input-row">
                         <input id="release" name="release" type="text" value="$(release)" />
@@ -174,8 +174,8 @@ impl SettingsComponent {
             <div id="row-clean" class="task-order-row" style="order: $(clean_order);">
                 <div class="task-order-content">
                     <div class="setting-row-label">
-                        <input id="default-clean" type="checkbox" class="setting-default-checkbox" />
                         <label for="default-clean">Clean command</label>
+                        <input id="default-clean" type="checkbox" class="setting-default-checkbox" />
                     </div>
                     <div class="task-command-input-row">
                         <input id="clean" name="clean" type="text" value="$(clean)" />
@@ -189,8 +189,8 @@ impl SettingsComponent {
             <div id="row-terminal" class="task-order-row" style="order: $(terminal_order);">
                 <div class="task-order-content">
                     <div class="setting-row-label">
-                        <input id="default-terminal" type="checkbox" class="setting-default-checkbox" />
                         <label for="default-terminal">Terminal command</label>
+                        <input id="default-terminal" type="checkbox" class="setting-default-checkbox" />
                     </div>
                     <div class="task-command-input-row">
                         <input id="terminal" name="terminal" type="text" value="$(terminal)" />
@@ -206,10 +206,6 @@ impl SettingsComponent {
                     let label = action.label.clone().unwrap_or_default();
                     let command = action.command.clone().unwrap_or_default();
 
-                    if label.is_empty() || command.is_empty() {
-                        continue;
-                    }
-
                     let command_id = format!("custom-command-{}", index);
                     let default_id = format!("custom-default-{}", index);
 
@@ -217,8 +213,8 @@ impl SettingsComponent {
                         <div id="row-$(command_id)" class="task-order-row" style="order: $(task_order(label.as_str(), 6 + index));">
                             <div class="task-order-content">
                                 <div class="setting-row-label">
-                                    <input id="$(default_id)" type="checkbox" class="setting-default-checkbox" />
                                     <label for="$(default_id)">$(label)</label>
+                                    <input id="$(default_id)" type="checkbox" class="setting-default-checkbox" />
                                 </div>
                                 <div class="task-command-input-row">
                                     <input id="$(command_id)" name="$(command_id)" type="text" value="$(command)" />
@@ -340,7 +336,6 @@ async fn add_scheduled_run(id: String) {
         inner.scheduled.push(ScheduledRun {
             frequency: Some("daily".to_string()),
             at: Some(at),
-            day_of_month: None,
         });
     }
 
@@ -369,8 +364,8 @@ fn remove_scheduled_run(id: String, index: String) {
 
 #[callback("addCustomCommand")]
 async fn add_cusom_command(id: String) {
-    let label = try_get_value("#custom-label");
-    let command = try_get_value("#custom-command");
+    let label = try_get_value("#custom-label").trim().to_string();
+    let command = try_get_value("#custom-command").trim().to_string();
 
     if label.is_empty() || command.is_empty() {
         log!("Not a full command.");
@@ -387,9 +382,25 @@ async fn add_cusom_command(id: String) {
     {
         let mut inner = component.borrow_mut();
         inner.custom.push(CustomCommand {
-            label: Some(label),
+            label: Some(label.clone()),
             command: Some(command),
         });
+    }
+
+    let mut tasks: Vec<String> = component.get_attribute("tasks").unwrap_or_default();
+    if !tasks.iter().any(|task| task == &label) {
+        tasks.push(label.clone());
+    }
+
+    let mut order: HashMap<String, i32> = component.get_attribute("order").unwrap_or_default();
+    order.entry(label.clone()).or_insert(tasks.len() as i32);
+
+    if let Some(element) = get_element_by_id(&id) {
+        let tasks_json = serde_json::to_string(&tasks).unwrap_or_else(|_| "[]".to_string());
+        let order_json = serde_json::to_string(&order).unwrap_or_else(|_| "{}".to_string());
+
+        let _ = element.set_attribute("tasks", tasks_json.as_str());
+        let _ = element.set_attribute("order", order_json.as_str());
     }
 
     component.render();
@@ -423,7 +434,7 @@ async fn save_settings(id: String) {
     if try_has_explicit_order("#order-git") {
         order.insert("git".to_string(), git_order);
     }
-    if try_is_checked("#default-git") && !git.trim().is_empty() {
+    if try_is_checked("#default-git") {
         ordered_tasks.push(("git".to_string(), git_order, task_sequence));
         task_sequence += 1;
     }
@@ -432,7 +443,7 @@ async fn save_settings(id: String) {
     if try_has_explicit_order("#order-build") {
         order.insert("build".to_string(), build_order);
     }
-    if try_is_checked("#default-build") && !build.trim().is_empty() {
+    if try_is_checked("#default-build") {
         ordered_tasks.push(("build".to_string(), build_order, task_sequence));
         task_sequence += 1;
     }
@@ -441,7 +452,7 @@ async fn save_settings(id: String) {
     if try_has_explicit_order("#order-test") {
         order.insert("test".to_string(), test_order);
     }
-    if try_is_checked("#default-test") && !test.trim().is_empty() {
+    if try_is_checked("#default-test") {
         ordered_tasks.push(("test".to_string(), test_order, task_sequence));
         task_sequence += 1;
     }
@@ -450,7 +461,7 @@ async fn save_settings(id: String) {
     if try_has_explicit_order("#order-release") {
         order.insert("release".to_string(), release_order);
     }
-    if try_is_checked("#default-release") && !release.trim().is_empty() {
+    if try_is_checked("#default-release") {
         ordered_tasks.push(("release".to_string(), release_order, task_sequence));
         task_sequence += 1;
     }
@@ -459,7 +470,7 @@ async fn save_settings(id: String) {
     if try_has_explicit_order("#order-clean") {
         order.insert("clean".to_string(), clean_order);
     }
-    if try_is_checked("#default-clean") && !clean.trim().is_empty() {
+    if try_is_checked("#default-clean") {
         ordered_tasks.push(("clean".to_string(), clean_order, task_sequence));
         task_sequence += 1;
     }
@@ -468,7 +479,7 @@ async fn save_settings(id: String) {
     if try_has_explicit_order("#order-terminal") {
         order.insert("terminal".to_string(), terminal_order);
     }
-    if try_is_checked("#default-terminal") && !terminal.trim().is_empty() {
+    if try_is_checked("#default-terminal") {
         ordered_tasks.push(("terminal".to_string(), terminal_order, task_sequence));
         task_sequence += 1;
     }
@@ -489,7 +500,6 @@ async fn save_settings(id: String) {
                 Some(ScheduledRun {
                     frequency: Some("daily".to_string()),
                     at: Some(at),
-                    day_of_month: None,
                 })
             })
             .collect::<Vec<ScheduledRun>>();
@@ -566,7 +576,7 @@ async fn save_settings(id: String) {
         scheduled_runs: Some(scheduled_runs.clone()),
         tasks: Some(tasks.clone()),
         order: Some(order.clone()),
-        run_all: Some(tasks.clone()),
+        run_all: None,
     };
 
     let endpont = format!("/save-settings?project={}", project);
@@ -803,8 +813,24 @@ fn reorder_task_order_list() {
         },
     );
 
-    for (_, _, _, _, row) in ordered_rows {
+    for (position, (_, _, _, _, row)) in ordered_rows.into_iter().enumerate() {
+        let normalized_order = (position as i32) + 1;
+
+        let _ = row.set_attribute("style", format!("order: {};", normalized_order).as_str());
         let _ = task_order_list.append_child(&row);
+
+        let row_id = row.id();
+        let Some(task_key) = row_id.strip_prefix("row-") else {
+            continue;
+        };
+
+        let input_selector = format!("#order-{}", task_key);
+        if let Ok(Some(input_element)) = task_order_list.query_selector(input_selector.as_str()) {
+            if let Ok(input) = input_element.dyn_into::<HtmlInputElement>() {
+                input.set_value(normalized_order.to_string().as_str());
+                let _ = input.set_attribute("data-order", normalized_order.to_string().as_str());
+            }
+        }
     }
 }
 

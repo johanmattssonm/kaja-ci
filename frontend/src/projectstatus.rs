@@ -87,13 +87,9 @@ impl Component for ProjectStatusComponent {
             let terminal = settings.terminal.unwrap_or_default();
             let custom = settings.custom_comands.unwrap_or_default();
             let custom_json = serde_json::to_string(&custom).unwrap_or_else(|_| "[]".to_string());
-            let tasks = settings
-                .run_all
-                .clone()
-                .or(settings.tasks.clone())
-                .unwrap_or_else(|| {
-                    vec!["git".to_string(), "build".to_string(), "test".to_string()]
-                });
+            let tasks = settings.tasks.clone().unwrap_or_else(|| {
+                vec!["git".to_string(), "build".to_string(), "test".to_string()]
+            });
             let order = settings.order.unwrap_or_default();
             let tasks_json = serde_json::to_string(&tasks).unwrap_or_else(|_| "[]".to_string());
             let order_json = serde_json::to_string(&order).unwrap_or_else(|_| "{}".to_string());

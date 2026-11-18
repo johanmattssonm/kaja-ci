@@ -1,7 +1,7 @@
 use actix_web::http::header::ContentType;
 use actix_web::{Error, HttpRequest, HttpResponse, Responder, web};
 use actix_ws::{Message, handle};
-use chrono::{Datelike, Local, SecondsFormat, Timelike};
+use chrono::{Local, SecondsFormat, Timelike};
 use serde::{Deserialize, Serialize};
 
 use std::collections::HashSet;
@@ -115,7 +115,6 @@ async fn run_due_scheduled_runs_once() {
     let now = Local::now();
     let minute_key = now.format("%Y-%m-%d %H:%M").to_string();
     let now_hhmm = now.format("%H:%M").to_string();
-    let now_day = now.day() as u8;
 
     if let Ok(mut seen) = scheduler_last_keys().lock()
         && seen.len() > 5_000
@@ -129,24 +128,13 @@ async fn run_due_scheduled_runs_once() {
         let scheduled = load_scheduled_run_rows(project.as_str());
         for schedule in scheduled {
             let frequency = schedule.frequency.to_lowercase();
-            let is_due = match frequency.as_str() {
-                "daily" => schedule.at == now_hhmm,
-                "monthly" => schedule.at == now_hhmm && schedule.day_of_month == Some(now_day),
-                _ => false,
-            };
+            let is_due = frequency == "daily" && schedule.at == now_hhmm;
 
             if !is_due {
                 continue;
             }
 
-            let trigger_key = format!(
-                "{}|{}|{}|{}|{}",
-                project,
-                frequency,
-                schedule.at,
-                schedule.day_of_month.unwrap_or(0),
-                minute_key
-            );
+            let trigger_key = format!("{}|{}|{}|{}", project, frequency, schedule.at, minute_key);
 
             let should_trigger = scheduler_last_keys()
                 .lock()
@@ -175,7 +163,6 @@ async fn run_due_scheduled_runs_once() {
 struct ScheduledRunRow {
     frequency: String,
     at: String,
-    day_of_month: Option<u8>,
 }
 
 fn load_scheduled_run_rows(project: &str) -> Vec<ScheduledRunRow> {
@@ -209,21 +196,11 @@ fn load_scheduled_run_rows(project: &str) -> Vec<ScheduledRunRow> {
                         .unwrap_or_default()
                         .trim()
                         .to_string();
-                    let day_of_month = map
-                        .get("day_of_month")
-                        .and_then(|value| value.as_u64())
-                        .and_then(|value| u8::try_from(value).ok())
-                        .filter(|value| (1..=31).contains(value));
-
-                    if frequency.is_empty() || at.len() != 5 {
+                    if frequency != "daily" || at.len() != 5 {
                         return None;
                     }
 
-                    Some(ScheduledRunRow {
-                        frequency,
-                        at,
-                        day_of_month,
-                    })
+                    Some(ScheduledRunRow { frequency, at })
                 })
                 .collect::<Vec<ScheduledRunRow>>()
         })
@@ -581,67 +558,99 @@ fn load_task_keys(project: &str) -> Vec<String> {
         return Vec::new();
     };
 
+    let configured_rows = config_json
+        .get("tasks")
+        .and_then(|value| value.as_array())
+        .cloned()
+        .unwrap_or_default();
+
+    let mut tasks = Vec::<String>::new();
+
+    for row in configured_rows.iter().filter_map(|row| row.as_object()) {
+        let task_key = row
+            .get("task")
+            .and_then(|value| value.as_str())
+            .or_else(|| row.get("label").and_then(|value| value.as_str()))
+            .unwrap_or_default()
+            .trim()
+            .to_string();
+
+        if task_key.is_empty() {
+            continue;
+        }
+
+        let command = row
+            .get("command")
+            .and_then(|value| value.as_str())
+            .unwrap_or_default()
+            .trim()
+            .to_string();
+
+        if command.is_empty() {
+            continue;
+        }
+
+        let include_in_run_all = row
+            .get("run-all")
+            .and_then(|value| value.as_bool())
+            .unwrap_or(false);
+
+        if include_in_run_all {
+            tasks.push(task_key);
+        }
+    }
+
+    if !tasks.is_empty() {
+        return tasks;
+    }
+
+    let configured_task_keys = configured_rows
+        .iter()
+        .filter_map(|row| row.as_object())
+        .filter_map(|row| {
+            let task_key = row
+                .get("task")
+                .and_then(|value| value.as_str())
+                .or_else(|| row.get("label").and_then(|value| value.as_str()))
+                .unwrap_or_default()
+                .trim()
+                .to_string();
+
+            if task_key.is_empty() {
+                return None;
+            }
+
+            let command = row
+                .get("command")
+                .and_then(|value| value.as_str())
+                .unwrap_or_default()
+                .trim()
+                .to_string();
+
+            if command.is_empty() {
+                return None;
+            }
+
+            Some(task_key)
+        })
+        .collect::<HashSet<String>>();
+
     let run_all = config_json
         .get("run-all")
         .and_then(|value| value.as_array())
         .cloned()
         .unwrap_or_default();
 
-    let configured_task_keys = config_json
-        .get("tasks")
-        .and_then(|value| value.as_array())
-        .map(|rows| {
-            rows.iter()
-                .filter_map(|row| row.as_object())
-                .filter_map(|row| {
-                    let task_key = row
-                        .get("task")
-                        .and_then(|value| value.as_str())
-                        .or_else(|| row.get("label").and_then(|value| value.as_str()))
-                        .unwrap_or_default()
-                        .trim()
-                        .to_string();
-
-                    if task_key.is_empty() {
-                        return None;
-                    }
-
-                    let command = row
-                        .get("command")
-                        .and_then(|value| value.as_str())
-                        .unwrap_or_default()
-                        .trim()
-                        .to_string();
-
-                    if command.is_empty() {
-                        return None;
-                    }
-
-                    Some(task_key)
-                })
-                .collect::<HashSet<String>>()
+    run_all
+        .iter()
+        .filter_map(|value| value.as_str())
+        .map(str::trim)
+        .filter(|task_key| !task_key.is_empty())
+        .filter(|task_key| {
+            configured_task_keys.is_empty() || configured_task_keys.contains(*task_key)
         })
-        .unwrap_or_default();
-
-    let mut tasks = Vec::<String>::new();
-    for value in run_all {
-        let Some(task_key) = value.as_str() else {
-            continue;
-        };
-
-        let task_key = task_key.trim();
-        if task_key.is_empty() {
-            continue;
-        }
-
-        if !configured_task_keys.is_empty() && !configured_task_keys.contains(task_key) {
-            continue;
-        }
-
-        tasks.push(task_key.to_string());
-    }
-
-    tasks
+        .map(ToString::to_string)
+        .collect::<Vec<String>>()
 }
 
 fn task_href(action: &str, project: &str) -> String {

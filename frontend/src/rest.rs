@@ -115,7 +115,6 @@ pub struct CustomCommand {
 pub struct ScheduledRun {
     pub frequency: Option<String>,
     pub at: Option<String>,
-    pub day_of_month: Option<u8>,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
