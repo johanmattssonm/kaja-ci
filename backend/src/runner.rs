@@ -855,6 +855,36 @@ mod tests {
         assert!(!command_requires_shell("cargo test --release"));
     }
 
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn prepends_http11_for_git_commands_on_macos() {
+        let args = vec![
+            "clone".to_string(),
+            "https://example.com/repo.git".to_string(),
+        ];
+
+        let adjusted = apply_git_http_workaround("git", &args);
+
+        assert_eq!(adjusted[0], "-c");
+        assert_eq!(adjusted[1], "http.version=HTTP/1.1");
+        assert_eq!(&adjusted[2..], args.as_slice());
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn keeps_existing_http_version_override_for_git() {
+        let args = vec![
+            "-c".to_string(),
+            "http.version=HTTP/2".to_string(),
+            "clone".to_string(),
+            "https://example.com/repo.git".to_string(),
+        ];
+
+        let adjusted = apply_git_http_workaround("git", &args);
+
+        assert_eq!(adjusted, args);
+    }
+
     #[test]
     fn non_terminal_detached_task_key_uses_default_shape() {
         assert_eq!(
@@ -1378,6 +1408,58 @@ fn should_force_ls_color(program: &str, args: &[String]) -> bool {
         .any(|arg| arg == "--color" || arg.starts_with("--color=") || arg == "-G")
 }
 
+#[cfg(target_os = "macos")]
+fn is_git_program(program: &str) -> bool {
+    let binary = program.rsplit('/').next().unwrap_or(program);
+    binary == "git" || binary == "git.exe"
+}
+
+#[cfg(target_os = "macos")]
+fn has_git_http_version_override(args: &[String]) -> bool {
+    let mut idx = 0usize;
+
+    while idx < args.len() {
+        let arg = &args[idx];
+
+        if arg == "-c" {
+            if let Some(value) = args.get(idx + 1)
+                && value.starts_with("http.version=")
+            {
+                return true;
+            }
+
+            idx += 2;
+            continue;
+        }
+
+        if let Some(value) = arg.strip_prefix("-c")
+            && value.starts_with("http.version=")
+        {
+            return true;
+        }
+
+        idx += 1;
+    }
+
+    false
+}
+
+fn apply_git_http_workaround(program: &str, args: &[String]) -> Vec<String> {
+    #[cfg(target_os = "macos")]
+    {
+        if is_git_program(program) && !has_git_http_version_override(args) {
+            let mut adjusted = Vec::with_capacity(args.len() + 2);
+            adjusted.push("-c".to_string());
+            adjusted.push("http.version=HTTP/1.1".to_string());
+            adjusted.extend(args.iter().cloned());
+            return adjusted;
+        }
+    }
+
+    let _ = program;
+    args.to_vec()
+}
+
 fn command_requires_shell(command: &str) -> bool {
     const SHELL_META: [&str; 8] = ["&&", "||", "|", ";", ">", "<", "$", "`"];
     SHELL_META.iter().any(|token| command.contains(token))
@@ -1396,13 +1478,14 @@ fn parse_command(command: Option<String>, folder: &str) -> Result<CommandBuilder
         let (program, args) = parts
             .split_first()
             .ok_or_else(|| "Empty command".to_string())?;
+        let args = apply_git_http_workaround(program, args);
         let mut cmd = CommandBuilder::new(program);
 
-        for arg in args {
+        for arg in &args {
             cmd.arg(arg);
         }
 
-        if should_force_ls_color(program, args) {
+        if should_force_ls_color(program, &args) {
             cmd.arg("--color=always");
         }
 
