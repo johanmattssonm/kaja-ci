@@ -5,7 +5,7 @@ use wasm_bindgen_futures::spawn_local;
 mod auth;
 mod buildstatus;
 mod color;
-mod consolecompoent;
+mod consolecomponent;
 mod projectstatus;
 mod settings;
 mod tauri;
@@ -111,8 +111,9 @@ pub fn init() {
 
     spawn_local(async {
         let _ = crate::auth::session_key().await;
-    });
+        crate::auth::bootstrap_session().await;
 
-    init_callbacks();
-    update_project_folder_picker_visibility();
+        init_callbacks();
+        update_project_folder_picker_visibility();
+    });
 }

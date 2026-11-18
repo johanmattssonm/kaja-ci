@@ -410,7 +410,6 @@ fn abort_task_with_beacon(task_key: Option<&str>, project: Option<&str>) -> bool
     let Some(endpoint) = abort_endpoint(task_key, project) else {
         return false;
     };
-    let endpoint = auth::with_cached_key(endpoint.as_str());
 
     let Some(window) = web_sys::window() else {
         return false;
@@ -964,10 +963,9 @@ fn is_active_console_connection(component_id: &str, task_key: &str, connection_i
 }
 
 async fn connect_console_view(id: String, task_key: String, connection_id: String) {
-    let endpoint = auth::with_key("ws://127.0.0.1:2003/runner")
-        .await
-        .unwrap_or_else(|| "ws://127.0.0.1:2003/runner".to_string());
-    let ws = WebSocket::open(endpoint.as_str());
+    auth::bootstrap_session().await;
+
+    let ws = WebSocket::open("ws://127.0.0.1:2003/runner");
 
     if ws.is_err() {
         gloo::console::error!("Failed to open websocket");

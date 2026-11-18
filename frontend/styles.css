@@ -1,8 +1,9 @@
 @font-face {
     font-family: "Kaja CI";
-    src: url("/font/Font-Kaja-CI.otf") format("opentype"),
-         url("/font/Font-Kaja-CI.ttf") format("truetype"),
-         url("/font/Font-Kaja-CI.svg") format("svg");
+    src:
+        url("/font/Font-Kaja-CI.otf") format("opentype"),
+        url("/font/Font-Kaja-CI.ttf") format("truetype"),
+        url("/font/Font-Kaja-CI.svg") format("svg");
     font-weight: normal;
     font-style: normal;
     font-display: swap;
@@ -10,8 +11,9 @@
 
 @font-face {
     font-family: "Kaja CI Mac";
-    src: url("/font/Font-Kaja-CI%20Mac.otf") format("opentype"),
-         url("/font/Font-Kaja-CI%20Mac.ttf") format("truetype");
+    src:
+        url("/font/Font-Kaja-CI%20Mac.otf") format("opentype"),
+        url("/font/Font-Kaja-CI%20Mac.ttf") format("truetype");
     font-weight: normal;
     font-style: normal;
     font-display: swap;
@@ -27,7 +29,9 @@ body {
     padding: 16px 24px 24px;
     background: #1f1f1f;
     color: #e7e7e7;
-    font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
+    font-family:
+        ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas,
+        "Liberation Mono", "Courier New", monospace;
     line-height: 1.45;
 }
 
@@ -92,7 +96,10 @@ form {
     padding: 6px 10px;
     border-radius: 6px;
     border: 1px solid transparent;
-    transition: background-color 120ms ease, border-color 120ms ease, color 120ms ease;
+    transition:
+        background-color 120ms ease,
+        border-color 120ms ease,
+        color 120ms ease;
 }
 
 .top-bar-link:hover,
@@ -259,7 +266,9 @@ button:hover {
     color: #fff;
     height: 40px;
     width: 52px;
-    font-family: "Kaja CI", "Kaja CI Mac", ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
+    font-family:
+        "Kaja CI", "Kaja CI Mac", ui-monospace, SFMono-Regular, Menlo, Monaco,
+        Consolas, "Liberation Mono", "Courier New", monospace;
 }
 
 .custom-command-inputs {
@@ -286,7 +295,10 @@ button:hover {
     color: #eaf3ff;
     font-weight: 700;
     letter-spacing: 0.01em;
-    transition: transform 120ms ease, filter 120ms ease, border-color 120ms ease;
+    transition:
+        transform 120ms ease,
+        filter 120ms ease,
+        border-color 120ms ease;
 }
 
 a,
@@ -347,7 +359,7 @@ tbody tr:last-child td {
 }
 
 .terminal-output {
-    height: 679px;
+    height: 450px;
     width: 1197px;
     margin: 12px auto;
 }
@@ -358,15 +370,18 @@ tbody tr:last-child td {
     justify-content: center;
 }
 
-
 .terminal-connect-button {
     margin-top: 0;
     min-width: 160px;
     padding: 10px 18px;
 }
 
-.terminal-span { white-space: pre; }
-.terminal-bold { font-weight: 700; }
+.terminal-span {
+    white-space: pre;
+}
+.terminal-bold {
+    font-weight: 700;
+}
 
 .terminal-mono {
     color: #e6edf3;
@@ -415,41 +430,107 @@ tbody tr:last-child td {
     color: inherit;
 }
 
-.terminal-fg-black { color: #0b0b0b; }
-.terminal-fg-red { color: #ff7b72; }
-.terminal-fg-green { color: #3fb950; }
-.terminal-fg-yellow { color: #d29922; }
-.terminal-fg-blue { color: #79c0ff; }
-.terminal-fg-magenta { color: #bc8cff; }
-.terminal-fg-cyan { color: #76e3ea; }
-.terminal-fg-white { color: #f0f6fc; }
+.terminal-fg-black {
+    color: #0b0b0b;
+}
+.terminal-fg-red {
+    color: #ff7b72;
+}
+.terminal-fg-green {
+    color: #3fb950;
+}
+.terminal-fg-yellow {
+    color: #d29922;
+}
+.terminal-fg-blue {
+    color: #79c0ff;
+}
+.terminal-fg-magenta {
+    color: #bc8cff;
+}
+.terminal-fg-cyan {
+    color: #76e3ea;
+}
+.terminal-fg-white {
+    color: #f0f6fc;
+}
 
-.terminal-fg-bright-black { color: #8b949e; }
-.terminal-fg-bright-red { color: #ffa198; }
-.terminal-fg-bright-green { color: #56d364; }
-.terminal-fg-bright-yellow { color: #e3b341; }
-.terminal-fg-bright-blue { color: #a5d6ff; }
-.terminal-fg-bright-magenta { color: #d2a8ff; }
-.terminal-fg-bright-cyan { color: #8be9fd; }
-.terminal-fg-bright-white { color: #ffffff; }
+.terminal-fg-bright-black {
+    color: #8b949e;
+}
+.terminal-fg-bright-red {
+    color: #ffa198;
+}
+.terminal-fg-bright-green {
+    color: #56d364;
+}
+.terminal-fg-bright-yellow {
+    color: #e3b341;
+}
+.terminal-fg-bright-blue {
+    color: #a5d6ff;
+}
+.terminal-fg-bright-magenta {
+    color: #d2a8ff;
+}
+.terminal-fg-bright-cyan {
+    color: #8be9fd;
+}
+.terminal-fg-bright-white {
+    color: #ffffff;
+}
 
-.terminal-bg-black { background: #0b0b0b; }
-.terminal-bg-red { background: #7f1d1d; }
-.terminal-bg-green { background: #14532d; }
-.terminal-bg-yellow { background: #713f12; }
-.terminal-bg-blue { background: #1e3a8a; }
-.terminal-bg-magenta { background: #581c87; }
-.terminal-bg-cyan { background: #134e4a; }
-.terminal-bg-white { background: #cbd5e1; color: #0f172a; }
+.terminal-bg-black {
+    background: #0b0b0b;
+}
+.terminal-bg-red {
+    background: #7f1d1d;
+}
+.terminal-bg-green {
+    background: #14532d;
+}
+.terminal-bg-yellow {
+    background: #713f12;
+}
+.terminal-bg-blue {
+    background: #1e3a8a;
+}
+.terminal-bg-magenta {
+    background: #581c87;
+}
+.terminal-bg-cyan {
+    background: #134e4a;
+}
+.terminal-bg-white {
+    background: #cbd5e1;
+    color: #0f172a;
+}
 
-.terminal-bg-bright-black { background: #334155; }
-.terminal-bg-bright-red { background: #b91c1c; }
-.terminal-bg-bright-green { background: #166534; }
-.terminal-bg-bright-yellow { background: #a16207; }
-.terminal-bg-bright-blue { background: #1d4ed8; }
-.terminal-bg-bright-magenta { background: #7e22ce; }
-.terminal-bg-bright-cyan { background: #0e7490; }
-.terminal-bg-bright-white { background: #f8fafc; color: #0f172a; }
+.terminal-bg-bright-black {
+    background: #334155;
+}
+.terminal-bg-bright-red {
+    background: #b91c1c;
+}
+.terminal-bg-bright-green {
+    background: #166534;
+}
+.terminal-bg-bright-yellow {
+    background: #a16207;
+}
+.terminal-bg-bright-blue {
+    background: #1d4ed8;
+}
+.terminal-bg-bright-magenta {
+    background: #7e22ce;
+}
+.terminal-bg-bright-cyan {
+    background: #0e7490;
+}
+.terminal-bg-bright-white {
+    background: #f8fafc;
+    color: #0f172a;
+}
 
 .terminal-caret {
     background: #e6edf3;

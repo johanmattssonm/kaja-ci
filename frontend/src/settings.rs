@@ -580,9 +580,9 @@ async fn save_settings(id: String) {
         run_all: None,
     };
 
-    let endpont = format!("/save-settings?project={}", project);
-    let endpoint = auth::with_key(endpont.as_str()).await.unwrap_or(endpont);
-    let result = match Request::post(endpoint.as_str()).json(&settings) {
+    let endpoint = format!("/save-settings?project={}", project);
+    let request = auth::with_auth_header(Request::post(endpoint.as_str())).await;
+    let result = match request.json(&settings) {
         Ok(request) => request.send().await,
         Err(_) => {
             try_inner_text("#save-status", "Failed to build save request.");

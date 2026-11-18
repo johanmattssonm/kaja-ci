@@ -81,6 +81,7 @@ pub async fn run_server(session_key: String) -> io::Result<()> {
                 }),
             )
             .service(index::index)
+            .service(auth::establish_session)
             .service(addproject::add_project)
             .service(clone::clone_handler)
             .service(clone::compact_clone_handler)

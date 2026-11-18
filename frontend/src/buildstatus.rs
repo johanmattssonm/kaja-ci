@@ -269,12 +269,12 @@ fn start_build_status_connection(project: String) {
 
 fn connect_task_ws(project: String, abort_registration: futures_util::future::AbortRegistration) {
     spawn_local(async move {
+        auth::bootstrap_session().await;
+
         let endpoint = format!(
             "ws://127.0.0.1:2003/task?project={}",
             js_sys::encode_uri_component(project.as_str())
         );
-
-        let endpoint = auth::with_key(endpoint.as_str()).await.unwrap_or(endpoint);
 
         let ws = WebSocket::open(endpoint.as_str());
 

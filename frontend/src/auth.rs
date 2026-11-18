@@ -1,5 +1,7 @@
-use gloo_net::http::{Request, Response};
+use gloo_net::http::{Request, RequestBuilder, Response};
 use std::cell::RefCell;
+
+const AUTH_HEADER_NAME: &str = "x-kaja-key";
 
 thread_local! {
     static SESSION_KEY: RefCell<Option<String>> = const { RefCell::new(None) };
@@ -24,38 +26,24 @@ pub async fn session_key() -> Option<String> {
     Some(key)
 }
 
-pub async fn with_key(endpoint: &str) -> Option<String> {
-    let key = session_key().await?;
-    Some(with_key_value(endpoint, key.as_str()))
+pub async fn with_auth_header(request: RequestBuilder) -> RequestBuilder {
+    match session_key().await {
+        Some(key) => request.header(AUTH_HEADER_NAME, key.as_str()),
+        None => request,
+    }
 }
 
-pub fn with_cached_key(endpoint: &str) -> String {
-    let key = SESSION_KEY.with(|value| value.borrow().clone());
-
-    match key {
-        Some(key) => with_key_value(endpoint, key.as_str()),
-        None => endpoint.to_string(),
-    }
+pub async fn bootstrap_session() {
+    let request = with_auth_header(Request::post("/auth/session")).await;
+    let _ = request.send().await;
 }
 
 pub async fn get(endpoint: &str) -> Result<Response, gloo_net::Error> {
-    let endpoint = with_key(endpoint)
-        .await
-        .unwrap_or_else(|| endpoint.to_string());
-    Request::get(endpoint.as_str()).send().await
+    let request = with_auth_header(Request::get(endpoint)).await;
+    request.send().await
 }
 
 pub async fn post(endpoint: &str) -> Result<Response, gloo_net::Error> {
-    let endpoint = with_key(endpoint)
-        .await
-        .unwrap_or_else(|| endpoint.to_string());
-    Request::post(endpoint.as_str()).send().await
-}
-
-fn with_key_value(endpoint: &str, key: &str) -> String {
-    if endpoint.contains('?') {
-        format!("{endpoint}&kaja_key={}", js_sys::encode_uri_component(key))
-    } else {
-        format!("{endpoint}?kaja_key={}", js_sys::encode_uri_component(key))
-    }
+    let request = with_auth_header(Request::post(endpoint)).await;
+    request.send().await
 }

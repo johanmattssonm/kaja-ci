@@ -308,12 +308,13 @@ impl ProjectStatusComponent {
 }
 
 #[callback("goTo")]
-fn go_to(url: String) {
+async fn go_to(url: String) {
+    auth::bootstrap_session().await;
+
     let Some(window) = web_sys::window() else {
         return;
     };
 
-    let url = auth::with_cached_key(url.as_str());
     let _ = window.location().set_href(url.as_str());
 }
 
