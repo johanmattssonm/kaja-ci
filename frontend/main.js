@@ -3,7 +3,7 @@ let wasmModule;
 async function loadWasm() {
   try {
     const wasmModule = await import("/pkg/kajaci.js");
-    await wasmModule.default("/pkg/kajaci_bg.wasm");
+    await wasmModule.default({ module_or_path: "/pkg/kajaci_bg.wasm" });
 
     return wasmModule;
   } catch (error) {
