@@ -1,3 +1,22 @@
+@font-face {
+    font-family: "Kaja CI";
+    src: url("/font/Font-Kaja-CI.otf") format("opentype"),
+         url("/font/Font-Kaja-CI.ttf") format("truetype"),
+         url("/font/Font-Kaja-CI.svg") format("svg");
+    font-weight: normal;
+    font-style: normal;
+    font-display: swap;
+}
+
+@font-face {
+    font-family: "Kaja CI Mac";
+    src: url("/font/Font-Kaja-CI%20Mac.otf") format("opentype"),
+         url("/font/Font-Kaja-CI%20Mac.ttf") format("truetype");
+    font-weight: normal;
+    font-style: normal;
+    font-display: swap;
+}
+
 * {
     box-sizing: border-box;
 }
@@ -95,6 +114,11 @@ console-component {
 h1 {
     margin: 0 0 18px;
     font-size: clamp(1.4rem, 2.6vw, 2rem);
+}
+
+.ci-icon {
+    font-family: "Kaja CI", "Kaja CI Mac";
+    margin-right: 0.25em;
 }
 
 p {

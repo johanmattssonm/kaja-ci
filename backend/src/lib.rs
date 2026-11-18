@@ -30,6 +30,14 @@ fn frontend_pkg_dir() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../frontend/pkg")
 }
 
+fn font_dir() -> PathBuf {
+    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../font")
+}
+
+fn favicon_ico_path() -> PathBuf {
+    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../public/favicon.ico")
+}
+
 pub async fn run_server(session_key: String) -> io::Result<()> {
     settingsfile::ensure_kaja_ci_dirs_exist().map_err(io::Error::other)?;
     app::ensure_log_base_dir_exists()?;
@@ -40,6 +48,8 @@ pub async fn run_server(session_key: String) -> io::Result<()> {
     println!("Frontend: http://127.0.0.1:2003/");
 
     let pkg_dir = frontend_pkg_dir();
+    let fonts_dir = font_dir();
+    let favicon_ico = favicon_ico_path();
     let auth_state = web::Data::new(auth::AppAuth::new(session_key));
 
     HttpServer::new(move || {
@@ -47,7 +57,12 @@ pub async fn run_server(session_key: String) -> io::Result<()> {
             .app_data(auth_state.clone())
             .wrap_fn(|req, srv| {
                 let path = req.path().to_string();
-                let public_path = path == "/" || path.starts_with("/pkg/") || path == "/pkg";
+                let public_path = path == "/"
+                    || path.starts_with("/pkg/")
+                    || path == "/pkg"
+                    || path.starts_with("/font/")
+                    || path == "/font"
+                    || path == "/favicon.ico";
 
                 if public_path || auth::is_authorized(req.request()) {
                     Either::Left(srv.call(req))
@@ -58,6 +73,17 @@ pub async fn run_server(session_key: String) -> io::Result<()> {
                 }
             })
             .service(fs::Files::new("/pkg", pkg_dir.clone()))
+            .service(fs::Files::new("/font", fonts_dir.clone()))
+            .route(
+                "/favicon.ico",
+                web::get().to({
+                    let favicon_ico = favicon_ico.clone();
+                    move || {
+                        let favicon_ico = favicon_ico.clone();
+                        async move { fs::NamedFile::open_async(favicon_ico).await }
+                    }
+                }),
+            )
             .service(index::index)
             .service(addproject::add_project)
             .service(clone::clone_handler)

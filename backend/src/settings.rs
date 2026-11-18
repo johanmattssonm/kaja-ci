@@ -210,7 +210,7 @@ fn load_settings_for_ui(project_path: &std::path::Path) -> BuildCommands {
         .trim()
         .is_empty()
     {
-        settings.terminal = Some("bash".to_string());
+        settings.terminal = Some(default_terminal_command());
     }
 
     let config_json = match serde_json::from_str::<serde_json::Value>(config_string.as_str()) {

@@ -1,12 +1,16 @@
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
+#[path = "../../frontend/src/rest.rs"]
+mod rest;
+
 use crate::settingsfile::{
     AppSettings, kaja_ci_base_dir, kaja_ci_projects_dir, kaja_ci_settings_path,
 };
 use actix_web::http::header::ContentType;
 use actix_web::{HttpResponse, Responder, web};
 use kaja_html_macro::html;
+use rest::default_terminal_command;
 use serde::Deserialize;
 
 #[derive(Debug, Deserialize)]
@@ -122,7 +126,7 @@ pub fn default_ci_json_value() -> serde_json::Value {
                 "task": "clean"
             },
             {
-                "command": "bash",
+                "command": default_terminal_command(),
                 "task": "terminal"
             }
         ],

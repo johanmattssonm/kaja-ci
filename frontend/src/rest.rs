@@ -1,6 +1,28 @@
 use serde::*;
 use std::collections::HashMap;
 
+pub fn default_terminal_command() -> String {
+    #[cfg(target_os = "windows")]
+    {
+        return "powershell".to_string();
+    }
+
+    #[cfg(target_os = "macos")]
+    {
+        return "zsh".to_string();
+    }
+
+    #[cfg(target_os = "linux")]
+    {
+        return "bash".to_string();
+    }
+
+    #[cfg(not(any(target_os = "windows", target_os = "macos", target_os = "linux")))]
+    {
+        "bash".to_string()
+    }
+}
+
 #[derive(Debug)]
 struct ParsedTaskEntry {
     task: String,
@@ -125,7 +147,7 @@ impl Default for BuildCommands {
             test: None,
             release: None,
             clean: None,
-            terminal: Some("bash".to_string()),
+            terminal: Some(default_terminal_command()),
             custom_comands: None,
             scheduled_runs: None,
             tasks: None,
