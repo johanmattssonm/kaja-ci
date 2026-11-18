@@ -95,6 +95,7 @@ impl SettingsComponent {
         let release_order = task_order("release", 3);
         let clean_order = task_order("clean", 4);
         let terminal_order = task_order("terminal", 5);
+        let custom_order_base = get_task_order_row_count().max(6);
 
         let git_has_explicit_order = has_explicit_order("git");
         let build_has_explicit_order = has_explicit_order("build");
@@ -208,9 +209,14 @@ impl SettingsComponent {
 
                     let command_id = format!("custom-command-{}", index);
                     let default_id = format!("custom-default-{}", index);
+                    let custom_order = order
+                        .get(label.as_str())
+                        .copied()
+                        .unwrap_or(custom_order_base + index as i32);
+                    let custom_has_explicit_order = order.contains_key(label.as_str());
 
                     <markup>
-                        <div id="row-$(command_id)" class="task-order-row" style="order: $(task_order(label.as_str(), 6 + index));">
+                        <div id="row-$(command_id)" class="task-order-row" style="order: $(custom_order);">
                             <div class="task-order-content">
                                 <div class="setting-row-label">
                                     <label for="$(default_id)">$(label), run by default: </label>
@@ -218,7 +224,7 @@ impl SettingsComponent {
                                 </div>
                                 <div class="task-command-input-row">
                                     <input id="$(command_id)" name="$(command_id)" type="text" value="$(command)" />
-                                    <input id="order-$(command_id)" class="task-order-input" type="number" value="$(task_order(label.as_str(), 6 + index))" oninput="setTaskOrder('$id', '$command_id')" data-order="$(task_order(label.as_str(), 6 + index))" data-explicit-order="$(order.contains_key(label.as_str()))" />
+                                    <input id="order-$(command_id)" class="task-order-input" type="number" value="$(custom_order)" oninput="setTaskOrder('$id', '$command_id')" data-order="$(custom_order)" data-explicit-order="$(custom_has_explicit_order)" />
                                     <button class="task-order-button" type="button" onclick="moveTaskUp('$id', '$command_id')">&#x2191;</button>
                                     <button class="task-order-button" type="button" onclick="moveTaskDown('$id', '$command_id')">&#x2193;</button>
                                 </div>
@@ -392,15 +398,9 @@ async fn add_cusom_command(id: String) {
         tasks.push(label.clone());
     }
 
-    let mut order: HashMap<String, i32> = component.get_attribute("order").unwrap_or_default();
-    order.entry(label.clone()).or_insert(tasks.len() as i32);
-
     if let Some(element) = get_element_by_id(&id) {
         let tasks_json = serde_json::to_string(&tasks).unwrap_or_else(|_| "[]".to_string());
-        let order_json = serde_json::to_string(&order).unwrap_or_else(|_| "{}".to_string());
-
         let _ = element.set_attribute("tasks", tasks_json.as_str());
-        let _ = element.set_attribute("order", order_json.as_str());
     }
 
     component.render();
@@ -429,6 +429,7 @@ async fn save_settings(id: String) {
     let mut ordered_tasks = Vec::<(String, i32, usize)>::new();
     let mut task_sequence = 0_usize;
     let mut order = HashMap::<String, i32>::new();
+    let custom_order_base = get_task_order_row_count().max(6);
 
     let git_order = try_get_i32_value("#order-git").unwrap_or(1);
     if try_has_explicit_order("#order-git") {
@@ -530,8 +531,8 @@ async fn save_settings(id: String) {
 
                 let checkbox_selector = format!("#custom-default-{}", index);
                 let order_selector = format!("#order-custom-command-{}", index);
-                let command_order =
-                    try_get_i32_value(order_selector.as_str()).unwrap_or(100 + index as i32);
+                let command_order = try_get_i32_value(order_selector.as_str())
+                    .unwrap_or(custom_order_base + index as i32);
                 if try_has_explicit_order(order_selector.as_str()) {
                     order.insert(label.to_string(), command_order);
                 }
@@ -837,6 +838,26 @@ fn reorder_task_order_list() {
 fn try_get_i32_value(selector: &str) -> Option<i32> {
     let value = try_get_value(selector);
     value.trim().parse::<i32>().ok()
+}
+
+fn get_task_order_row_count() -> i32 {
+    let Some(window) = web_sys::window() else {
+        return 0;
+    };
+
+    let Some(document) = window.document() else {
+        return 0;
+    };
+
+    let Ok(Some(task_order_list)) = document.query_selector("#task-order-list") else {
+        return 0;
+    };
+
+    let Ok(rows) = task_order_list.query_selector_all(".task-order-row") else {
+        return 0;
+    };
+
+    rows.length() as i32
 }
 
 fn try_has_explicit_order(selector: &str) -> bool {
