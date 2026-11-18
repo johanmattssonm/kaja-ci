@@ -38,7 +38,7 @@ pub async fn index() -> impl Responder {
             </head>
             <body>
                 <main>
-                    <h1><span class="ci-icon">&#xE773;</span>Projects</h1>
+                    <h1>Projects</h1>
 
                     <rust>
                         for project in projects.clone() {

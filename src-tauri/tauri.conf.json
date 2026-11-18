@@ -14,8 +14,8 @@
     "windows": [
       {
         "title": "tauri-app",
-        "width": 1200,
-        "height": 800,
+        "width": 1203,
+        "height": 761,
         "url": "http://127.0.0.1:2003"
       }
     ],
