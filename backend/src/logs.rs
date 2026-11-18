@@ -102,7 +102,7 @@ pub async fn latest_log_raw(params: web::Query<LogParams>) -> impl Responder {
         if let Some(metadata) = metadata_for_raw_file(file_name.as_str()) {
             let action = params.action.as_deref().unwrap_or_default().trim();
             let should_return_combined =
-                action == "run-all" || (action.is_empty() && metadata.action == "run-all");
+                action == "run-default" || (action.is_empty() && metadata.action == "run-default");
 
             if should_return_combined {
                 let body = combined_raw_log_for_run_all(&metadata);
@@ -144,7 +144,7 @@ pub async fn latest_log_raw(params: web::Query<LogParams>) -> impl Responder {
                 .body("No log history found.");
         };
 
-        if action.trim() == "run-all" {
+        if action.trim() == "run-default" {
             let body = combined_raw_log_for_run_all(&metadata);
 
             if body.is_empty() {
@@ -464,7 +464,7 @@ fn combined_raw_log_for_run_all(run_all: &TaskHistoryMetadata) -> Vec<u8> {
                 return false;
             }
 
-            metadata.action != "run-all"
+            metadata.action != "run-default"
                 && is_within_run_all_window(metadata, started_at, finished_at)
         })
         .collect::<Vec<_>>();

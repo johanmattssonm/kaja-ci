@@ -1159,6 +1159,7 @@ fn handle_copy_shortcut(event: &web_sys::KeyboardEvent) -> bool {
     }
 
     event.prevent_default();
+    event.stop_propagation();
     let _ = js_sys::eval("document.execCommand('copy')");
     true
 }
@@ -1243,7 +1244,22 @@ fn setup_log_output_shortcuts(id: &str) {
         return;
     }
 
+    let focus_output = output.clone();
+    let click_focus = Closure::<dyn FnMut(_)>::new(move |_event: web_sys::Event| {
+        let _ = focus_output.focus();
+    });
+
+    if output
+        .add_event_listener_with_callback("click", click_focus.as_ref().unchecked_ref())
+        .is_err()
+    {
+        log!("Failed to register log output click handler");
+        return;
+    }
+
+    let _ = output.focus();
     output_keydown.forget();
+    click_focus.forget();
 }
 
 fn setup_stdin_handler(id: &str, input_tx: mpsc::UnboundedSender<String>) {

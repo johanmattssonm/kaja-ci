@@ -330,7 +330,7 @@ struct RunAllResponse {
 
 #[callback("runAll")]
 async fn run_all(project: String) {
-    let endpoint = format!("/run-all?project={}", project);
+    let endpoint = format!("/run-default?project={}", project);
 
     let response = match auth::get(endpoint.as_str()).await {
         Ok(response) => response,

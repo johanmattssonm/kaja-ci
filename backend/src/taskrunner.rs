@@ -334,10 +334,10 @@ pub async fn websocket(req: HttpRequest, body: web::Payload) -> Result<HttpRespo
             ok: true,
             running: true,
             project: requested_project.clone(),
-            task_key: format!("run-all-{}", requested_project),
-            action: "run-all".to_string(),
+            task_key: format!("run-default-{}", requested_project),
+            action: "run-default".to_string(),
             time: now_time_string(),
-            href: task_href("run-all", requested_project.as_str()),
+            href: task_href("run-default", requested_project.as_str()),
             message: Some("Run-all is running.".to_string()),
             branch: current_branch_or_label(requested_project.as_str()),
         };
@@ -387,7 +387,7 @@ pub async fn websocket(req: HttpRequest, body: web::Payload) -> Result<HttpRespo
     Ok(response)
 }
 
-#[actix_web::get("/run-all")]
+#[actix_web::get("/run-default")]
 pub async fn run(params: web::Query<RunAllParams>) -> impl Responder {
     let project = params.project.clone();
 
@@ -449,11 +449,11 @@ async fn run_all_for_project(project: String) -> bool {
         return false;
     }
 
-    let run_all_task_key = format!("run-all-{}", project);
+    let run_all_task_key = format!("run-default-{}", project);
     send_task_status_with_running_and_message(
         run_all_task_key.as_str(),
         true,
-        Some("run-all"),
+        Some("run-default"),
         Some(project.as_str()),
         true,
         Some("Run-all started."),
@@ -464,7 +464,7 @@ async fn run_all_for_project(project: String) -> bool {
     append_run_all_history_line(
         history.as_ref(),
         format!(
-            "[{}] [run-all] started project: {}\n",
+            "[{}] [run-default] started project: {}\n",
             now_time_string(),
             project
         )
@@ -472,12 +472,12 @@ async fn run_all_for_project(project: String) -> bool {
     );
 
     for task_key in task_keys {
-        println!("[run-all] starting task: {} project: {}", task_key, project);
+        println!("[run-default] starting task: {} project: {}", task_key, project);
 
         append_run_all_history_line(
             history.as_ref(),
             format!(
-                "[{}] [run-all] starting task: {} project: {}\n",
+                "[{}] [run-default] starting task: {} project: {}\n",
                 now_time_string(),
                 task_key,
                 project
@@ -491,7 +491,7 @@ async fn run_all_for_project(project: String) -> bool {
             append_run_all_history_line(
                 history.as_ref(),
                 format!(
-                    "[{}] [run-all] completed task: {} status: failed project: {}\n",
+                    "[{}] [run-default] completed task: {} status: failed project: {}\n",
                     now_time_string(),
                     task_key,
                     project
@@ -503,7 +503,7 @@ async fn run_all_for_project(project: String) -> bool {
             send_task_status_with_running_and_message(
                 run_all_task_key.as_str(),
                 false,
-                Some("run-all"),
+                Some("run-default"),
                 Some(project.as_str()),
                 false,
                 Some("Run-all stopped after a failed task."),
@@ -514,7 +514,7 @@ async fn run_all_for_project(project: String) -> bool {
         append_run_all_history_line(
             history.as_ref(),
             format!(
-                "[{}] [run-all] completed task: {} status: success project: {}\n",
+                "[{}] [run-default] completed task: {} status: success project: {}\n",
                 now_time_string(),
                 task_key,
                 project
@@ -526,7 +526,7 @@ async fn run_all_for_project(project: String) -> bool {
     append_run_all_history_line(
         history.as_ref(),
         format!(
-            "[{}] [run-all] completed project: {}\n",
+            "[{}] [run-default] completed project: {}\n",
             now_time_string(),
             project
         )
@@ -537,7 +537,7 @@ async fn run_all_for_project(project: String) -> bool {
     send_task_status_with_running_and_message(
         run_all_task_key.as_str(),
         true,
-        Some("run-all"),
+        Some("run-default"),
         Some(project.as_str()),
         false,
         None,
@@ -591,7 +591,7 @@ fn load_task_keys(project: &str) -> Vec<String> {
         }
 
         let include_in_run_all = row
-            .get("run-all")
+            .get("run-default")
             .and_then(|value| value.as_bool())
             .unwrap_or(false);
 
@@ -636,7 +636,7 @@ fn load_task_keys(project: &str) -> Vec<String> {
         .collect::<HashSet<String>>();
 
     let run_all = config_json
-        .get("run-all")
+        .get("run-default")
         .and_then(|value| value.as_array())
         .cloned()
         .unwrap_or_default();
@@ -657,7 +657,7 @@ fn task_href(action: &str, project: &str) -> String {
     match action {
         "clean" => format!("/clean?project={project}"),
         "terminal" => format!("/terminal?project={project}"),
-        "run-all" => format!("/log?project={project}&action=run-all"),
+        "run-default" => format!("/log?project={project}&action=run-default"),
         "log" => format!("/log?project={project}"),
         custom => format!("/custom?project={project}&custom_label={custom}"),
     }
@@ -755,7 +755,7 @@ fn create_run_all_history(project: &str) -> Option<RunAllHistory> {
     let raw_path = base_dir.join(format!("{}.raw", datestamp));
     let meta_path = base_dir.join(format!("{}.json", datestamp));
     let started_at = Local::now().to_rfc3339_opts(SecondsFormat::Secs, false);
-    let task_key = format!("run-all-{project}");
+    let task_key = format!("run-default-{project}");
     let branch = current_branch_or_label(project);
 
     let history = RunAllHistory {
@@ -806,7 +806,7 @@ impl RunAllHistory {
             datestamp: self.datestamp.clone(),
             task_key: self.task_key.clone(),
             project: self.project.clone(),
-            action: "run-all".to_string(),
+            action: "run-default".to_string(),
             status: status.to_string(),
             started_at: self.started_at.clone(),
             finished_at,

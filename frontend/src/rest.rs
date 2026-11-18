@@ -70,7 +70,7 @@ where
                 }
 
                 let include_in_run_all = map
-                    .get("run-all")
+                    .get("run-default")
                     .and_then(|value| value.as_bool())
                     .unwrap_or(false);
 
@@ -155,7 +155,7 @@ pub struct BuildCommands {
     #[serde(default, deserialize_with = "deserialize_tasks_option")]
     pub tasks: Option<Vec<String>>,
     pub order: Option<HashMap<String, i32>>,
-    #[serde(rename = "run-all")]
+    #[serde(rename = "run-default")]
     pub run_all: Option<Vec<String>>,
 }
 

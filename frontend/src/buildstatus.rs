@@ -388,7 +388,8 @@ fn load_latest_build_status(id: String, project: String) {
 
     spawn_local(async move {
         let encoded_project = js_sys::encode_uri_component(project.as_str()).to_string();
-        let run_all_endpoint = format!("/log/latest?project={}&action=run-all", encoded_project);
+        let run_all_endpoint =
+            format!("/log/latest?project={}&action=run-default", encoded_project);
         let endpoint = format!("/log/latest?project={}", encoded_project);
 
         let run_all_metadata = fetch_latest_metadata(run_all_endpoint.as_str()).await;
@@ -554,6 +555,15 @@ fn format_status_label(status: &str, branch: &str, task: &str, local_time: &str)
         _ => "",
     };
 
+    let icon = if icon.is_empty() {
+        "".to_string()
+    } else {
+        format!(
+            "<span style=\"font-family: 'Kaja CI', 'Kaja CI Mac';\">{}</span>",
+            icon
+        )
+    };
+
     if local_time.is_empty() {
         format!("{} {} {} {}", icon, status, branch, task)
     } else {
@@ -567,7 +577,7 @@ fn normalized_task(action: &str, task_key: &str) -> String {
     let raw = if !action.is_empty() && action != "log" {
         action
     } else if task_key.trim() == "all-done" {
-        "run-all"
+        "run-default"
     } else if !task_key.trim().is_empty() {
         task_key
             .split_once('-')
@@ -616,6 +626,21 @@ pub(crate) fn render_build_status_error(project: &str, message: &str) {
     render_status(component_id.as_str(), "", message);
 }
 
+fn split_icon_prefix(label: &str) -> (&str, &str) {
+    if !label.starts_with("<span") {
+        return ("", label);
+    }
+
+    let Some(end_index) = label.find("</span>") else {
+        return ("", label);
+    };
+
+    let icon_end = end_index + "</span>".len();
+    let remainder = label[icon_end..].trim_start();
+
+    (&label[..icon_end], remainder)
+}
+
 fn render_status(id: &str, href: &str, label: &str) {
     let element = match get_element_by_id(id) {
         Some(element) => element,
@@ -630,17 +655,33 @@ fn render_status(id: &str, href: &str, label: &str) {
         return;
     }
 
+    let label_markup = label.to_string();
+
     if href.trim().is_empty() {
         let content = html! {{
-            <span>$label</span>
+            <span><include label_markup /></span>
         }};
 
         element.set_inner_html(content.as_str());
         return;
     }
 
+    let (icon_markup, text_markup) = split_icon_prefix(label);
+
+    if icon_markup.is_empty() {
+        let content = html! {{
+            <a href="$href"><include label_markup /></a>
+        }};
+
+        element.set_inner_html(content.as_str());
+        return;
+    }
+
+    let icon_markup = icon_markup.to_string();
+    let text_markup = text_markup.to_string();
+
     let content = html! {{
-        <a href="$href">$label</a>
+        <include icon_markup /> &nbsp;<a href="$href"><include text_markup /></a>
     }};
 
     element.set_inner_html(content.as_str());

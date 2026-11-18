@@ -88,7 +88,7 @@ pub async fn save_settings(
     let scheduled_runs = build_commands.scheduled_runs.clone().unwrap_or_default();
     let settings_json = serde_json::json!({
         "tasks": task_rows,
-        "run-all": run_all,
+        "run-default": run_all,
         "scheduled-run": scheduled_runs
     });
 
@@ -244,7 +244,7 @@ fn load_settings_for_ui(project_path: &std::path::Path) -> BuildCommands {
         }
 
         let include_in_run_all = map
-            .get("run-all")
+            .get("run-default")
             .and_then(|value| value.as_bool())
             .unwrap_or(false);
 
@@ -361,7 +361,7 @@ fn load_settings_for_ui(project_path: &std::path::Path) -> BuildCommands {
 
     if run_all_missing
         && let Some(top_level_run_all) = config_json
-            .get("run-all")
+            .get("run-default")
             .and_then(|value| value.as_array())
     {
         let fallback_tasks = normalized_run_all(
@@ -463,13 +463,13 @@ fn task_rows_from_build_commands(build_commands: &BuildCommands) -> Vec<serde_js
                 serde_json::json!({
                     "label": task_name,
                     "command": command,
-                    "run-all": include_in_run_all
+                    "run-default": include_in_run_all
                 })
             } else {
                 serde_json::json!({
                     "task": task_name,
                     "command": command,
-                    "run-all": include_in_run_all
+                    "run-default": include_in_run_all
                 })
             }
         })

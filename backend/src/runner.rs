@@ -1635,7 +1635,7 @@ async fn start_detached_action(
     let mut child = match pty_pair.slave.spawn_command(cmd) {
         Ok(child) => child,
         Err(err) => {
-            let message = format!("Failed to start command: {err}\n");
+            let message = format!("Failed to start command\n{err}\n");
             persist_detached_start_failure(
                 requested_task_key.as_str(),
                 action_name.as_str(),
@@ -1644,7 +1644,9 @@ async fn start_detached_action(
                 message.as_str(),
             )
             .await;
-            return Err(RunTaskError::Internal(message.trim_end().to_string()));
+            return Err(RunTaskError::Internal(
+                "Failed to start command".to_string(),
+            ));
         }
     };
 
@@ -2062,7 +2064,7 @@ async fn start_build(
             send_stdout_for_task(
                 session,
                 task_key.as_str(),
-                format!("Failed to start command: {err}\n").as_str(),
+                format!("Failed to start command\n{err}\n").as_str(),
             )
             .await;
             return;
