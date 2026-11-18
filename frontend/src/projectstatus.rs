@@ -384,6 +384,8 @@ async fn run_all(project: String) {
 struct BranchResponse {
     ok: bool,
     branch: String,
+    #[serde(default)]
+    message: Option<String>,
 }
 
 async fn load_settings(project: &str) -> Option<BuildCommands> {
@@ -415,13 +417,13 @@ async fn load_settings(project: &str) -> Option<BuildCommands> {
 }
 
 async fn load_branch(project: &str) -> String {
-    let endpoint = format!("/branch?project={}", project);
+    let endpoint = format!("/branch?project={}", js_sys::encode_uri_component(project));
 
     let response = match auth::get(endpoint.as_str()).await {
         Ok(response) => response,
         Err(_) => {
             log!("Failed to load branch.");
-            return "unknown".to_string();
+            return "no-git".to_string();
         }
     };
 
@@ -429,16 +431,34 @@ async fn load_branch(project: &str) -> String {
         Ok(body) => body,
         Err(_) => {
             log!("Failed to read branch response.");
-            return "unknown".to_string();
+            return "no-git".to_string();
         }
     };
 
     match serde_json::from_str::<BranchResponse>(body.as_str()) {
-        Ok(branch_response) if branch_response.ok => branch_response.branch,
-        Ok(_) => "unknown".to_string(),
+        Ok(branch_response) if branch_response.ok => {
+            let branch = branch_response.branch.trim();
+            if branch.is_empty() {
+                "no-git".to_string()
+            } else {
+                branch.to_string()
+            }
+        }
+        Ok(branch_response) => {
+            if let Some(message) = branch_response.message {
+                log!("Branch unavailable", message);
+            }
+
+            let branch = branch_response.branch.trim();
+            if branch.is_empty() {
+                "no-git".to_string()
+            } else {
+                branch.to_string()
+            }
+        }
         Err(_) => {
             log!("Failed to parse branch response.");
-            "unknown".to_string()
+            "no-git".to_string()
         }
     }
 }

@@ -9,7 +9,7 @@ use std::sync::LazyLock;
 use std::sync::{Arc, RwLock as StdRwLock};
 use tokio::sync::{RwLock, broadcast, mpsc};
 
-use crate::branch::current_branch;
+use crate::branch::current_branch_or_label;
 use crate::taskrunner::send_task_status;
 
 // The app can have one builder running and many terminals attached.
@@ -446,7 +446,7 @@ fn create_history_files(
         project: project.to_string(),
         action: action.to_string(),
         started_at,
-        branch: current_branch(project).unwrap_or_default(),
+        branch: current_branch_or_label(project),
     };
 
     let metadata = TaskHistoryMetadata {

@@ -12,6 +12,8 @@ struct BranchResponse {
     message: Option<String>,
 }
 
+pub const NO_GIT_BRANCH_LABEL: &str = "no-git";
+
 #[actix_web::get("/branch")]
 pub async fn branch(params: web::Query<ProjectGetParams>) -> impl Responder {
     match current_branch(params.project.as_str()) {
@@ -24,18 +26,32 @@ pub async fn branch(params: web::Query<ProjectGetParams>) -> impl Responder {
                     message: None,
                 })
         }
-        Err(message) => HttpResponse::BadRequest()
+        Err(message) => HttpResponse::Ok()
             .content_type(ContentType::json())
             .json(BranchResponse {
                 ok: false,
-                branch: String::new(),
+                branch: NO_GIT_BRANCH_LABEL.to_string(),
                 message: Some(message),
             }),
     }
 }
 
+pub fn current_branch_or_label(project_path: &str) -> String {
+    current_branch(project_path).unwrap_or_else(|_| NO_GIT_BRANCH_LABEL.to_string())
+}
+
 pub fn current_branch(project_path: &str) -> Result<String, String> {
-    let repo = Repository::open(project_path).map_err(|error| {
+    let project_path = project_path.trim();
+
+    if project_path.is_empty() {
+        return Err("Project path is empty.".to_string());
+    }
+
+    let repo = Repository::discover(project_path).map_err(|error| {
+        if error.code() == ErrorCode::NotFound {
+            return format!("'{}' is not a git repository.", project_path);
+        }
+
         format!(
             "Failed to open repository '{}': {}",
             project_path,

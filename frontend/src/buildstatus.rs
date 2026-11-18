@@ -470,7 +470,7 @@ fn normalized_branch(input: &str) -> String {
     let trimmed = input.trim();
 
     if trimmed.is_empty() {
-        "main".to_string()
+        "no-git".to_string()
     } else {
         trimmed.to_string()
     }

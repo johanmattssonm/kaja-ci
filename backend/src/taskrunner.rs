@@ -12,7 +12,7 @@ use std::sync::{Mutex, Once, OnceLock, RwLock as StdRwLock};
 use tokio::sync::broadcast;
 
 use crate::app::{TaskHistoryMetadata, log_base_dir};
-use crate::branch::current_branch;
+use crate::branch::current_branch_or_label;
 use crate::clone;
 use crate::runner::{RunTaskError, start_run_task};
 
@@ -303,7 +303,7 @@ pub fn send_task_status_with_running_and_message(
         branch: if project_value.is_empty() {
             String::new()
         } else {
-            current_branch(project_value.as_str()).unwrap_or_default()
+            current_branch_or_label(project_value.as_str())
         },
     };
 
@@ -362,7 +362,7 @@ pub async fn websocket(req: HttpRequest, body: web::Payload) -> Result<HttpRespo
             time: now_time_string(),
             href: task_href("run-all", requested_project.as_str()),
             message: Some("Run-all is running.".to_string()),
-            branch: current_branch(requested_project.as_str()).unwrap_or_default(),
+            branch: current_branch_or_label(requested_project.as_str()),
         };
 
         if let Ok(payload) = serde_json::to_string(&fallback_running_status) {
@@ -746,7 +746,7 @@ fn create_run_all_history(project: &str) -> Option<RunAllHistory> {
     let meta_path = base_dir.join(format!("{}.json", datestamp));
     let started_at = Local::now().to_rfc3339_opts(SecondsFormat::Secs, false);
     let task_key = format!("run-all-{project}");
-    let branch = current_branch(project).unwrap_or_default();
+    let branch = current_branch_or_label(project);
 
     let history = RunAllHistory {
         datestamp,
