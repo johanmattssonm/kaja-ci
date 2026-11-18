@@ -850,13 +850,6 @@ mod tests {
         assert!(is_terminal_task_key(second.as_str()));
     }
 
-    #[test]
-    fn detects_shell_operators_in_commands() {
-        assert!(command_requires_shell("echo RELEASE && exit 1"));
-        assert!(command_requires_shell("echo ok | sed 's/o/O/'"));
-        assert!(!command_requires_shell("cargo test --release"));
-    }
-
     #[cfg(target_os = "macos")]
     #[test]
     fn prepends_http11_for_git_commands_on_macos() {
@@ -1464,38 +1457,11 @@ fn apply_git_http_workaround(program: &str, args: &[String]) -> Vec<String> {
     args.to_vec()
 }
 
-fn command_requires_shell(command: &str) -> bool {
-    const SHELL_META: [&str; 8] = ["&&", "||", "|", ";", ">", "<", "$", "`"];
-    SHELL_META.iter().any(|token| command.contains(token))
-}
-
 fn parse_command(command: Option<String>, folder: &str) -> Result<CommandBuilder, String> {
     let command = command.ok_or_else(|| "No command".to_string())?;
-
-    let mut cmd = if command_requires_shell(command.as_str()) {
-        let mut cmd = CommandBuilder::new("sh");
-        cmd.arg("-lc");
-        cmd.arg(command.as_str());
-        cmd
-    } else {
-        let parts = shell_words::split(&command).map_err(|e| e.to_string())?;
-        let (program, args) = parts
-            .split_first()
-            .ok_or_else(|| "Empty command".to_string())?;
-        let args = apply_git_http_workaround(program, args);
-        let mut cmd = CommandBuilder::new(program);
-
-        for arg in &args {
-            cmd.arg(arg);
-        }
-
-        if should_force_ls_color(program, &args) {
-            cmd.arg("--color=always");
-        }
-
-        cmd
-    };
-
+    let mut cmd = CommandBuilder::new("sh");
+    cmd.arg("-lc");
+    cmd.arg(command.as_str());
     cmd.cwd(folder);
     apply_terminal_env(&mut cmd, TERMINAL_PTY_ROWS, TERMINAL_PTY_COLS);
     Ok(cmd)
