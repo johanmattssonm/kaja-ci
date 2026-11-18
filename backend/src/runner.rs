@@ -234,8 +234,6 @@ impl TerminalScreen {
                 0x08 => {
                     // BS (backspace)
                     self.cursor_col = self.cursor_col.saturating_sub(1);
-
-                    println!("BACKSPACE");
                 }
                 b'\t' => {
                     // HT (horizontal tab)
@@ -1069,7 +1067,7 @@ async fn process_action(
     };
 
     if !folder_exists(folder) {
-        println!("Project folder does not exist or is not writable.");
+        eprintln!("Project folder does not exist or is not writable.");
         send_stdout(session, "Can't find writable project folder.").await;
         send_status(session, "FAILED").await;
         return;
@@ -1145,8 +1143,6 @@ async fn process_attach_action(
 }
 
 async fn send_stdout(session: &mut Session, line: &str) {
-    println!("{}", line);
-
     let action = ActionResponse {
         stdout: Some(line.to_string()),
         action: "STDOUT".to_string(),
@@ -1166,8 +1162,6 @@ async fn send_stdout_for_task(session: &mut Session, task_key: &str, line: &str)
 }
 
 async fn send_status(session: &mut Session, line: &str) {
-    println!("Task status: {}", line);
-
     let action = ActionResponse {
         stdout: None,
         action: "STATUS".to_string(),
@@ -1191,9 +1185,7 @@ async fn handle_message(
             let text = text.to_string();
             process_ws_message(text, session, stdin_state).await
         }
-        Message::Close(_) => {
-            println!("WebSocket closed");
-        }
+        Message::Close(_) => {}
         _ => {
             println!("Unexpected WebSocket message");
         }
@@ -1207,9 +1199,6 @@ async fn process_ws_message(
 ) {
     #[cfg(debug_assertions)]
     println!("WS: {}", text); // don't print in release mode to protect pin, password etc.
-
-    #[cfg(not(debug_assertions))]
-    println!("WS: got websocket message.");
 
     let action = serde_json::from_str(text.as_str());
 
@@ -1256,7 +1245,7 @@ async fn process_std_in(action: Action, stdin_state: Arc<Mutex<BuildInputState>>
     };
 
     if tx.try_send(input_line.clone()).is_err() {
-        println!("STDIN send failed, buffering input.");
+        eprintln!("STDIN send failed, buffering input.");
         let mut state = stdin_state.lock().await;
         state.pending.push_back(input_line);
         return;
@@ -1295,7 +1284,7 @@ fn command_to_executable(action: &Action) -> Option<CommandBuilder> {
     let config_string = match std::fs::read_to_string(&project_dir) {
         Ok(contents) => contents,
         Err(err) => {
-            println!("Failed to read {}: {err}", project_dir.display());
+            eprintln!("Failed to read {}: {err}", project_dir.display());
             return None;
         }
     };
@@ -1312,7 +1301,7 @@ fn command_to_executable(action: &Action) -> Option<CommandBuilder> {
     let config_commands: BuildCommands = match serde_json::from_str(&config_string) {
         Ok(config) => config,
         Err(err) => {
-            println!("Failed to parse {}: {err}", project_dir.display());
+            eprintln!("Failed to parse {}: {err}", project_dir.display());
             return None;
         }
     };
@@ -1973,7 +1962,7 @@ fn queue_terminal_update(
     chunk: String,
 ) -> bool {
     let Some(websocket_payload) = build_terminal_action_payload(state, chunk.as_str()) else {
-        println!("Failed to build response package.");
+        eprintln!("Failed to build response package.");
         return false;
     };
 
@@ -1997,7 +1986,7 @@ fn broadcast_terminal_update(
     }
 
     let Some(payload) = build_terminal_action_payload(state, chunk) else {
-        println!("Failed to build response package.");
+        eprintln!("Failed to build response package.");
         return;
     };
 
@@ -2222,8 +2211,6 @@ async fn start_build(
     }
 
     let status = wait_for_exit(child);
-    println!("Task ended: {:?}", status);
-
     unregister_process(&action).await;
 
     if let Ok(status) = status {

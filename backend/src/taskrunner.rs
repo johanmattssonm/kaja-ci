@@ -472,8 +472,6 @@ async fn run_all_for_project(project: String) -> bool {
     );
 
     for task_key in task_keys {
-        println!("[run-default] starting task: {} project: {}", task_key, project);
-
         append_run_all_history_line(
             history.as_ref(),
             format!(
@@ -673,7 +671,6 @@ async fn run_task_from_run_all(project: &str, task_key: &str) -> bool {
         }
         Err(err) => {
             send_task_status_for_run_error(&err, task_key, project);
-            println!("Run task failed: {err} stop tasks.");
             false
         }
     }
@@ -720,7 +717,6 @@ async fn handle_started_task(
         }
 
         if !status.ok {
-            println!("Run task failed: {} stop tasks.", started_key);
             return false;
         }
 

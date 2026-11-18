@@ -43,10 +43,6 @@ pub async fn run_server(session_key: String) -> io::Result<()> {
     app::ensure_log_base_dir_exists()?;
     taskrunner::start_scheduler();
 
-    println!("Starting Kaja CI build server");
-    println!("WebSocket server: ws://127.0.0.1:2003/runner");
-    println!("Frontend: http://127.0.0.1:2003/");
-
     let pkg_dir = frontend_pkg_dir();
     let fonts_dir = font_dir();
     let favicon_ico = favicon_ico_path();

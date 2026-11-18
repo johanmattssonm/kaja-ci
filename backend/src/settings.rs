@@ -95,7 +95,7 @@ pub async fn save_settings(
     let update_settings = serde_json::to_string_pretty(&settings_json);
 
     if update_settings.is_err() {
-        println!("Failed to save settings. Invalid JSON.");
+        eprintln!("Failed to save settings. Invalid JSON.");
 
         return HttpResponse::BadRequest()
             .content_type(ContentType::json())
@@ -103,17 +103,10 @@ pub async fn save_settings(
     }
 
     let content = update_settings.unwrap();
-
-    println!(
-        "Saving settings {} {}",
-        content,
-        project_dir.to_str().unwrap()
-    );
-
     let result = fs::write(project_dir, content.as_str());
 
     if result.is_err() {
-        println!("Failed to save settings.");
+        eprintln!("Failed to save settings.");
 
         return HttpResponse::BadRequest()
             .content_type(ContentType::json())
@@ -138,7 +131,7 @@ pub async fn load_settings(params: web::Query<ProjectGetParams>) -> impl Respond
         let content = match serde_json::to_string_pretty(&settings) {
             Ok(content) => content,
             Err(err) => {
-                println!(
+                eprintln!(
                     "Failed to serialize settings for {:?}: {}",
                     project_dir, err
                 );
@@ -157,7 +150,7 @@ pub async fn load_settings(params: web::Query<ProjectGetParams>) -> impl Respond
     let content = match serde_json::to_string_pretty(&defaults) {
         Ok(content) => content,
         Err(err) => {
-            println!(
+            eprintln!(
                 "Failed to serialize default settings for {:?}: {}",
                 project_dir, err
             );
@@ -168,7 +161,7 @@ pub async fn load_settings(params: web::Query<ProjectGetParams>) -> impl Respond
     };
 
     if let Err(err) = fs::write(project_dir.as_path(), content.as_str()) {
-        println!(
+        eprintln!(
             "Failed to write default settings to {:?}: {}",
             project_dir, err
         );

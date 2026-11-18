@@ -18,8 +18,6 @@ pub async fn run(params: web::Query<RunGetParams>) -> impl Responder {
             "task": task_key
         })),
         Err(err) => {
-            println!("Run task failed: {}", err);
-
             let message = err.to_string();
             let running_task = match &err {
                 RunTaskError::AlreadyRunning(task_key) => Some(task_key.clone()),

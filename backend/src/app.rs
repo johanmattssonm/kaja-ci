@@ -163,7 +163,7 @@ impl AppData {
         };
 
         let Some(project_folder) = project_folder else {
-            println!("No project folder.");
+            eprintln!("No project folder.");
             return Err("No project folder.".to_string());
         };
 
@@ -233,7 +233,7 @@ impl AppData {
         project_folder: Option<String>,
     ) -> Result<(), String> {
         let (Some(task_type), Some(project_folder)) = (task_type, project_folder) else {
-            println!("Cannot drop task: missing task_type or project_folder");
+            eprintln!("Cannot drop task: missing task_type or project_folder");
             return Err("No project folder".to_string());
         };
 
@@ -263,7 +263,7 @@ impl AppData {
             };
 
         let Some(task) = self.tasks.get_mut(key) else {
-            println!("Task was not running.");
+            eprintln!("Task was not running.");
 
             if running_key == key {
                 self.running_task = None;
@@ -426,7 +426,7 @@ fn create_history_files(
     let base_dir = log_base_dir();
 
     if let Err(err) = fs::create_dir_all(base_dir.as_path()) {
-        println!(
+        eprintln!(
             "Failed to create history directory {}: {}",
             base_dir.display(),
             err
@@ -476,7 +476,7 @@ fn append_output_to_raw_file(path: &Path, output: &[u8]) {
     let mut file = match OpenOptions::new().create(true).append(true).open(path) {
         Ok(file) => file,
         Err(err) => {
-            println!(
+            eprintln!(
                 "Failed to open raw history file {}: {}",
                 path.display(),
                 err
@@ -486,7 +486,7 @@ fn append_output_to_raw_file(path: &Path, output: &[u8]) {
     };
 
     if let Err(err) = file.write_all(output) {
-        println!(
+        eprintln!(
             "Failed writing raw history file {}: {}",
             path.display(),
             err
@@ -538,7 +538,7 @@ fn write_metadata(path: &Path, metadata: &TaskHistoryMetadata) {
     let payload = match serde_json::to_vec_pretty(metadata) {
         Ok(payload) => payload,
         Err(err) => {
-            println!(
+            eprintln!(
                 "Failed to serialize metadata for {}: {}",
                 path.display(),
                 err
@@ -548,6 +548,6 @@ fn write_metadata(path: &Path, metadata: &TaskHistoryMetadata) {
     };
 
     if let Err(err) = fs::write(path, payload) {
-        println!("Failed to write metadata file {}: {}", path.display(), err);
+        eprintln!("Failed to write metadata file {}: {}", path.display(), err);
     }
 }
