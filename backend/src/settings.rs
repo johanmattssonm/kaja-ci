@@ -83,11 +83,12 @@ pub async fn save_settings(
     project_dir.push("ci.json");
 
     let order_map = build_commands.order.clone().unwrap_or_default();
-    let _run_all = normalized_run_all(build_commands.tasks.clone().unwrap_or_default(), &order_map);
+    let run_all = normalized_run_all(build_commands.tasks.clone().unwrap_or_default(), &order_map);
     let task_rows = task_rows_from_build_commands(&build_commands);
     let scheduled_runs = build_commands.scheduled_runs.clone().unwrap_or_default();
     let settings_json = serde_json::json!({
         "tasks": task_rows,
+        "run-all": run_all,
         "scheduled-run": scheduled_runs
     });
 

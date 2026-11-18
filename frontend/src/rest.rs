@@ -43,29 +43,51 @@ where
     let mut parsed = Vec::<ParsedTaskEntry>::new();
 
     for (index, value) in raw.into_iter().enumerate() {
-        let serde_json::Value::Object(map) = value else {
-            continue;
-        };
+        match value {
+            serde_json::Value::String(task) => {
+                let task = task.trim().to_string();
+                if task.is_empty() {
+                    continue;
+                }
 
-        let task = map
-            .get("task")
-            .and_then(|value| value.as_str())
-            .or_else(|| map.get("label").and_then(|value| value.as_str()))
-            .unwrap_or_default()
-            .trim()
-            .to_string();
+                parsed.push(ParsedTaskEntry {
+                    task,
+                    order: (index as i32) + 1,
+                    index,
+                });
+            }
+            serde_json::Value::Object(map) => {
+                let task = map
+                    .get("task")
+                    .and_then(|value| value.as_str())
+                    .or_else(|| map.get("label").and_then(|value| value.as_str()))
+                    .unwrap_or_default()
+                    .trim()
+                    .to_string();
 
-        if task.is_empty() {
-            continue;
+                if task.is_empty() {
+                    continue;
+                }
+
+                let include_in_run_all = map
+                    .get("run-all")
+                    .and_then(|value| value.as_bool())
+                    .unwrap_or(false);
+
+                if !include_in_run_all {
+                    continue;
+                }
+
+                let order = map
+                    .get("order")
+                    .and_then(|value| value.as_i64())
+                    .and_then(|value| i32::try_from(value).ok())
+                    .unwrap_or((index as i32) + 1);
+
+                parsed.push(ParsedTaskEntry { task, order, index });
+            }
+            _ => continue,
         }
-
-        let order = map
-            .get("order")
-            .and_then(|value| value.as_i64())
-            .and_then(|value| i32::try_from(value).ok())
-            .unwrap_or((index as i32) + 1);
-
-        parsed.push(ParsedTaskEntry { task, order, index });
     }
 
     parsed.sort_by(|a, b| {

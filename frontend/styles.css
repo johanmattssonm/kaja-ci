@@ -40,6 +40,10 @@ form {
     margin-bottom: 2em;
 }
 
+.task-order-input {
+    display: none;
+}
+
 .project-status-card {
     background: linear-gradient(180deg, #2b2b2b 0%, #212121 100%);
     border: 1px solid #3b3b3b;
@@ -229,24 +233,33 @@ button:hover {
 
 .task-order-row {
     margin: 0 0 12px;
+    width: 100%;
+    max-width: 100%;
 }
 
 .task-command-input-row {
-    display: grid;
-    grid-template-columns: 1fr 90px auto auto;
-    gap: 6px;
+    display: flex;
     align-items: center;
+    gap: 8px;
+    width: 100%;
+    max-width: 100%;
 }
 
 .task-order-input {
-    width: 90px;
-    text-align: center;
+    flex: 1 1 auto;
+    min-width: 0;
+    width: auto;
+    text-align: left;
 }
 
 .task-order-button {
     margin-top: 0;
-    width: 42px;
+    flex: 0 0 auto;
     padding: 8px 10px;
+    color: #fff;
+    height: 40px;
+    width: 52px;
+    font-family: "Kaja CI", "Kaja CI Mac", ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
 }
 
 .custom-command-inputs {

@@ -113,14 +113,14 @@ impl SettingsComponent {
             <div id="row-git" class="task-order-row" style="order: $(git_order);">
                 <div class="task-order-content">
                     <div class="setting-row-label">
-                        <label for="default-git">Git fetch command</label>
+                        <label for="default-git">Git fetch command, run by default: </label>
                         <input id="default-git" type="checkbox" class="setting-default-checkbox" />
                     </div>
                     <div class="task-command-input-row">
                         <input id="git" name="git" type="text" value="$(git)" />
                         <input id="order-git" class="task-order-input" type="number" value="$(git_order)" oninput="setTaskOrder('$id', 'git')" data-order="$(git_order)" data-explicit-order="$(git_has_explicit_order)" />
-                        <button class="task-order-button" type="button" onclick="moveTaskUp('$id', 'git')">Up</button>
-                        <button class="task-order-button" type="button" onclick="moveTaskDown('$id', 'git')">Down</button>
+                        <button class="task-order-button" type="button" onclick="moveTaskUp('$id', 'git')">&#x2191;</button>
+                        <button class="task-order-button" type="button" onclick="moveTaskDown('$id', 'git')">&#x2193;</button>
                     </div>
                 </div>
             </div>
@@ -135,8 +135,8 @@ impl SettingsComponent {
                     <div class="task-command-input-row">
                         <input id="build" name="build" type="text" value="$(build)" />
                         <input id="order-build" class="task-order-input" type="number" value="$(build_order)" oninput="setTaskOrder('$id', 'build')" data-order="$(build_order)" data-explicit-order="$(build_has_explicit_order)" />
-                        <button class="task-order-button" type="button" onclick="moveTaskUp('$id', 'build')">Up</button>
-                        <button class="task-order-button" type="button" onclick="moveTaskDown('$id', 'build')">Down</button>
+                        <button class="task-order-button" type="button" onclick="moveTaskUp('$id', 'build')">&#x2191;</button>
+                        <button class="task-order-button" type="button" onclick="moveTaskDown('$id', 'build')">&#x2193;</button>
                     </div>
                 </div>
             </div>
@@ -144,14 +144,14 @@ impl SettingsComponent {
             <div id="row-test" class="task-order-row" style="order: $(test_order);">
                 <div class="task-order-content">
                     <div class="setting-row-label">
-                        <label for="default-test">Test command</label>
+                        <label for="default-test">Test command, run by default: </label>
                         <input id="default-test" type="checkbox" class="setting-default-checkbox" />
                     </div>
                     <div class="task-command-input-row">
                         <input id="test" name="test" type="text" value="$(test)" />
                         <input id="order-test" class="task-order-input" type="number" value="$(test_order)" oninput="setTaskOrder('$id', 'test')" data-order="$(test_order)" data-explicit-order="$(test_has_explicit_order)" />
-                        <button class="task-order-button" type="button" onclick="moveTaskUp('$id', 'test')">Up</button>
-                        <button class="task-order-button" type="button" onclick="moveTaskDown('$id', 'test')">Down</button>
+                        <button class="task-order-button" type="button" onclick="moveTaskUp('$id', 'test')">&#x2191;</button>
+                        <button class="task-order-button" type="button" onclick="moveTaskDown('$id', 'test')">&#x2193;</button>
                     </div>
                 </div>
             </div>
@@ -159,14 +159,14 @@ impl SettingsComponent {
             <div id="row-release" class="task-order-row" style="order: $(release_order);">
                 <div class="task-order-content">
                     <div class="setting-row-label">
-                        <label for="default-release">Release command</label>
+                        <label for="default-release">Release command, run by default: </label>
                         <input id="default-release" type="checkbox" class="setting-default-checkbox" />
                     </div>
                     <div class="task-command-input-row">
                         <input id="release" name="release" type="text" value="$(release)" />
                         <input id="order-release" class="task-order-input" type="number" value="$(release_order)" oninput="setTaskOrder('$id', 'release')" data-order="$(release_order)" data-explicit-order="$(release_has_explicit_order)" />
-                        <button class="task-order-button" type="button" onclick="moveTaskUp('$id', 'release')">Up</button>
-                        <button class="task-order-button" type="button" onclick="moveTaskDown('$id', 'release')">Down</button>
+                        <button class="task-order-button" type="button" onclick="moveTaskUp('$id', 'release')">&#x2191;</button>
+                        <button class="task-order-button" type="button" onclick="moveTaskDown('$id', 'release')">&#x2193;</button>
                     </div>
                 </div>
             </div>
@@ -174,14 +174,14 @@ impl SettingsComponent {
             <div id="row-clean" class="task-order-row" style="order: $(clean_order);">
                 <div class="task-order-content">
                     <div class="setting-row-label">
-                        <label for="default-clean">Clean command</label>
+                        <label for="default-clean">Clean command, run by default: </label>
                         <input id="default-clean" type="checkbox" class="setting-default-checkbox" />
                     </div>
                     <div class="task-command-input-row">
                         <input id="clean" name="clean" type="text" value="$(clean)" />
                         <input id="order-clean" class="task-order-input" type="number" value="$(clean_order)" oninput="setTaskOrder('$id', 'clean')" data-order="$(clean_order)" data-explicit-order="$(clean_has_explicit_order)" />
-                        <button class="task-order-button" type="button" onclick="moveTaskUp('$id', 'clean')">Up</button>
-                        <button class="task-order-button" type="button" onclick="moveTaskDown('$id', 'clean')">Down</button>
+                        <button class="task-order-button" type="button" onclick="moveTaskUp('$id', 'clean')">&#x2191;</button>
+                        <button class="task-order-button" type="button" onclick="moveTaskDown('$id', 'clean')">&#x2193;</button>
                     </div>
                 </div>
             </div>
@@ -189,14 +189,14 @@ impl SettingsComponent {
             <div id="row-terminal" class="task-order-row" style="order: $(terminal_order);">
                 <div class="task-order-content">
                     <div class="setting-row-label">
-                        <label for="default-terminal">Terminal command</label>
+                        <label for="default-terminal">Terminal command, run by default: </label>
                         <input id="default-terminal" type="checkbox" class="setting-default-checkbox" />
                     </div>
                     <div class="task-command-input-row">
                         <input id="terminal" name="terminal" type="text" value="$(terminal)" />
                         <input id="order-terminal" class="task-order-input" type="number" value="$(terminal_order)" oninput="setTaskOrder('$id', 'terminal')" data-order="$(terminal_order)" data-explicit-order="$(terminal_has_explicit_order)" />
-                        <button class="task-order-button" type="button" onclick="moveTaskUp('$id', 'terminal')">Up</button>
-                        <button class="task-order-button" type="button" onclick="moveTaskDown('$id', 'terminal')">Down</button>
+                        <button class="task-order-button" type="button" onclick="moveTaskUp('$id', 'terminal')">&#x2191;</button>
+                        <button class="task-order-button" type="button" onclick="moveTaskDown('$id', 'terminal')">&#x2193;</button>
                     </div>
                 </div>
             </div>
@@ -213,14 +213,14 @@ impl SettingsComponent {
                         <div id="row-$(command_id)" class="task-order-row" style="order: $(task_order(label.as_str(), 6 + index));">
                             <div class="task-order-content">
                                 <div class="setting-row-label">
-                                    <label for="$(default_id)">$(label)</label>
+                                    <label for="$(default_id)">$(label), run by default: </label>
                                     <input id="$(default_id)" type="checkbox" class="setting-default-checkbox" />
                                 </div>
                                 <div class="task-command-input-row">
                                     <input id="$(command_id)" name="$(command_id)" type="text" value="$(command)" />
                                     <input id="order-$(command_id)" class="task-order-input" type="number" value="$(task_order(label.as_str(), 6 + index))" oninput="setTaskOrder('$id', '$command_id')" data-order="$(task_order(label.as_str(), 6 + index))" data-explicit-order="$(order.contains_key(label.as_str()))" />
-                                    <button class="task-order-button" type="button" onclick="moveTaskUp('$id', '$command_id')">Up</button>
-                                    <button class="task-order-button" type="button" onclick="moveTaskDown('$id', '$command_id')">Down</button>
+                                    <button class="task-order-button" type="button" onclick="moveTaskUp('$id', '$command_id')">&#x2191;</button>
+                                    <button class="task-order-button" type="button" onclick="moveTaskDown('$id', '$command_id')">&#x2193;</button>
                                 </div>
                             </div>
                         </div>
@@ -253,7 +253,7 @@ impl SettingsComponent {
 
                         <markup>
                             <div>
-                                <span>daily at $(at)</span>
+                                <span>Daily at $(at)</span>
                                 <button type="button" onclick="removeScheduledRun('$id', '$(index)')">Remove</button>
                             </div>
                         </markup>
