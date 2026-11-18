@@ -41,12 +41,12 @@ struct Settings {
 impl Component for SettingsComponent {
     fn connected(&self) {
         let id = self.get_id();
-        log!("Connected:", &id);
+        gloo::console::error!("Connected:", &id);
         self.render();
     }
 
     fn disconnected(&self) {
-        log!("Disconnected:", self.get_id());
+        gloo::console::error!("Disconnected:", self.get_id());
     }
 
     fn attribute_changed(&self, _name: &str, _old_value: &str, _new_value: &str) {}
@@ -58,7 +58,7 @@ impl SettingsComponent {
         let element = match get_element_by_id(&id) {
             Some(element) => element,
             None => {
-                log!("No root element for build component");
+                gloo::console::error!("No root element for build component");
                 return;
             }
         };
@@ -321,19 +321,19 @@ async fn add_scheduled_run(id: String) {
     let at = try_get_value("#scheduled-time").trim().to_string();
 
     if at.is_empty() {
-        log!("Scheduled run requires a time.");
+        gloo::console::error!("Scheduled run requires a time.");
         return;
     }
 
     if !is_valid_24h_time(at.as_str()) {
-        log!("Scheduled run time must use 24-hour format HH:MM.");
+        gloo::console::error!("Scheduled run time must use 24-hour format HH:MM.");
         return;
     }
 
     let component = SettingsComponent::get_component(&id);
 
     let Some(component) = component else {
-        log!("No component");
+        gloo::console::error!("No component");
         return;
     };
 
@@ -374,14 +374,14 @@ async fn add_cusom_command(id: String) {
     let command = try_get_value("#custom-command").trim().to_string();
 
     if label.is_empty() || command.is_empty() {
-        log!("Not a full command.");
+        gloo::console::error!("Not a full command.");
         return;
     }
 
     let component = SettingsComponent::get_component(&id);
 
     let Some(component) = component else {
-        log!("No component");
+        gloo::console::error!("No component");
         return;
     };
 
@@ -409,13 +409,13 @@ async fn add_cusom_command(id: String) {
 #[callback("saveSettings")]
 async fn save_settings(id: String) {
     let Some(component) = SettingsComponent::get_component(&id) else {
-        log!("No component");
+        gloo::console::error!("No component");
         return;
     };
 
     let project: Option<String> = component.get_attribute("project");
     let Some(project) = project else {
-        log!("Project is not set in settings.");
+        gloo::console::error!("Project is not set in settings.");
         return;
     };
 

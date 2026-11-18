@@ -66,7 +66,6 @@ impl Component for ConsoleComponent {
         let file: String = self.get_attribute("file").unwrap_or_default();
         let log_action: String = self.get_attribute("log_action").unwrap_or_default();
 
-        log!("Connected:", &id);
         self.render();
         focus_console_output(&id);
 
@@ -129,8 +128,6 @@ impl Component for ConsoleComponent {
 
     fn disconnected(&self) {
         let id = self.get_id();
-        log!("Disconnected:", &id);
-
         let action: String = self.get_attribute("action").unwrap_or_default();
 
         if action != "terminal" {
@@ -149,7 +146,7 @@ impl Component for ConsoleComponent {
 
         spawn_local(async move {
             if !abort_task(Some(task_key.as_str()), None).await {
-                log!("Failed to abort task on console disconnect.", task_key);
+                gloo::console::error!("Failed to abort task on console disconnect.", task_key);
             }
         });
     }
@@ -220,7 +217,7 @@ impl ConsoleComponent {
         let element = match get_element_by_id(&id) {
             Some(element) => element,
             None => {
-                log!("No root element for build component");
+                gloo::console::error!("No root element for build component");
                 return;
             }
         };
@@ -446,7 +443,7 @@ fn ensure_abort_on_exit_handlers() {
     };
 
     let Some(abort_on_exit) = get_callback("abortConsoleTaskOnExit") else {
-        log!("Missing abortConsoleTaskOnExit callback.");
+        gloo::console::error!("Missing abortConsoleTaskOnExit callback.");
         return;
     };
 
@@ -462,7 +459,7 @@ fn ensure_abort_on_exit_handlers() {
         .is_ok();
 
     if !pagehide && !beforeunload {
-        log!("Failed to register abort handlers for page exit.");
+        gloo::console::error!("Failed to register abort handlers for page exit.");
     }
 }
 
@@ -503,7 +500,7 @@ async fn abort_current_task(project: String) {
         try_inner_text("#save-status", "Failed to abort task.");
     } else if let Some(component) = get_element("console-component") {
         if component.set_attribute("task_key", "").is_err() {
-            log!("Failed to clear task_key attribute on console component.");
+            gloo::console::error!("Failed to clear task_key attribute on console component.");
         }
     }
 }
@@ -530,7 +527,7 @@ async fn start_task(project: &str, action: &str, command: Option<&str>) -> Optio
     let response = match auth::get(endpoint.as_str()).await {
         Ok(response) => response,
         Err(err) => {
-            log!("Failed to start task", format!("{err:?}"));
+            gloo::console::error!("Failed to start task", format!("{err:?}"));
             return None;
         }
     };
@@ -538,7 +535,7 @@ async fn start_task(project: &str, action: &str, command: Option<&str>) -> Optio
     let body = match response.text().await {
         Ok(body) => body,
         Err(err) => {
-            log!("Failed to read /run response", format!("{err:?}"));
+            gloo::console::error!("Failed to read /run response", format!("{err:?}"));
             return None;
         }
     };
@@ -546,7 +543,7 @@ async fn start_task(project: &str, action: &str, command: Option<&str>) -> Optio
     let payload: RunTaskResponse = match serde_json::from_str(body.as_str()) {
         Ok(payload) => payload,
         Err(err) => {
-            log!("Invalid /run response", format!("{err:?}"));
+            gloo::console::error!("Invalid /run response", format!("{err:?}"));
             return None;
         }
     };
@@ -556,20 +553,17 @@ async fn start_task(project: &str, action: &str, command: Option<&str>) -> Optio
             return Some(task);
         }
 
-        log!("Missing task key in /run response");
+        gloo::console::error!("Missing task key in /run response");
         return None;
     }
 
     if let Some(message) = payload.message {
-        log!("/run failed", &message);
-
         if let Some(running_task_key) = payload.task {
             render_running_task_status(message.as_str(), running_task_key.as_str(), project);
         } else {
             try_inner_text("#status", message.as_str());
         }
     } else {
-        log!("/run failed");
         try_inner_text("#status", "Failed to start task");
     }
 
@@ -605,7 +599,7 @@ fn task_href(task_key: &str, project: &str) -> String {
 #[callback("connectTerminal")]
 async fn connect_terminal(project: String) {
     let Some(console) = get_element("console-component") else {
-        log!("No console component found.");
+        gloo::console::error!("No console component found.");
         return;
     };
 
@@ -621,7 +615,7 @@ async fn connect_terminal(project: String) {
     }
 
     let Some(task_key) = start_task(project.as_str(), "terminal", None).await else {
-        log!("Failed to start terminal.");
+        gloo::console::error!("Failed to start terminal.");
         return;
     };
 
@@ -633,19 +627,19 @@ async fn connect_terminal(project: String) {
         .set_attribute("task_key", task_key.as_str())
         .is_err()
     {
-        log!("Failed to set task_key attribute on terminal console.");
+        gloo::console::error!("Failed to set task_key attribute on terminal console.");
     }
 
     if console.set_attribute("task_exited", "false").is_err() {
-        log!("Failed to set task_exited attribute on terminal console.");
+        gloo::console::error!("Failed to set task_exited attribute on terminal console.");
     }
 
     if console.set_attribute("connect", task_key.as_str()).is_err() {
-        log!("Failed to set connect attribute on terminal console.");
+        gloo::console::error!("Failed to set connect attribute on terminal console.");
     }
 
     if console.set_attribute("has_connected", "true").is_err() {
-        log!("Failed to set has_connected attribute on terminal console.");
+        gloo::console::error!("Failed to set has_connected attribute on terminal console.");
     }
 
     focus_console_output(&console_id);
@@ -654,7 +648,7 @@ async fn connect_terminal(project: String) {
 #[callback("exportLogPlainText")]
 fn export_log_plain_text() {
     let Some(console) = get_element("console-component") else {
-        log!("No console component found.");
+        gloo::console::error!("No console component found.");
         return;
     };
 
@@ -664,7 +658,7 @@ fn export_log_plain_text() {
     let output_id = format!("{}-output", component_id);
 
     let Some(output) = get_element_by_id(output_id.as_str()) else {
-        log!("No output box for log view component.");
+        gloo::console::error!("No output box for log view component.");
         return;
     };
 
@@ -676,19 +670,19 @@ fn export_log_plain_text() {
     }
 
     let Some(window) = web_sys::window() else {
-        log!("Failed to export plain text log: window unavailable.");
+        gloo::console::error!("Failed to export plain text log: window unavailable.");
         try_inner_text("#status", "Failed to export plain text log.");
         return;
     };
 
     let Some(document) = window.document() else {
-        log!("Failed to export plain text log: document unavailable.");
+        gloo::console::error!("Failed to export plain text log: document unavailable.");
         try_inner_text("#status", "Failed to export plain text log.");
         return;
     };
 
     let Some(body) = document.body() else {
-        log!("Failed to export plain text log: document.body unavailable.");
+        gloo::console::error!("Failed to export plain text log: document.body unavailable.");
         try_inner_text("#status", "Failed to export plain text log.");
         return;
     };
@@ -700,13 +694,13 @@ fn export_log_plain_text() {
     blob_opts.set_type("text/plain;charset=utf-8");
 
     let Ok(blob) = web_sys::Blob::new_with_str_sequence_and_options(&parts, &blob_opts) else {
-        log!("Failed to export plain text log: blob creation failed.");
+        gloo::console::error!("Failed to export plain text log: blob creation failed.");
         try_inner_text("#status", "Failed to export plain text log.");
         return;
     };
 
     let Ok(url) = web_sys::Url::create_object_url_with_blob(&blob) else {
-        log!("Failed to export plain text log: object URL creation failed.");
+        gloo::console::error!("Failed to export plain text log: object URL creation failed.");
         try_inner_text("#status", "Failed to export plain text log.");
         return;
     };
@@ -727,7 +721,7 @@ fn export_log_plain_text() {
     let _ = web_sys::Url::revoke_object_url(url.as_str());
 
     if result.is_err() {
-        log!("Failed to export plain text log.");
+        gloo::console::error!("Failed to export plain text log.");
         try_inner_text("#status", "Failed to export plain text log.");
         return;
     }
@@ -809,18 +803,18 @@ async fn ensure_builder_task_connected(action: &str, project: &str) {
             .set_attribute("task_key", task_key.as_str())
             .is_err()
         {
-            log!("Failed to set task_key attribute on console component.");
+            gloo::console::error!("Failed to set task_key attribute on console component.");
         }
 
         if component.set_attribute("task_exited", "false").is_err() {
-            log!("Failed to set task_exited attribute on console component.");
+            gloo::console::error!("Failed to set task_exited attribute on console component.");
         }
 
         if component
             .set_attribute("connect", task_key.as_str())
             .is_err()
         {
-            log!("Failed to set connect attribute on console component.");
+            gloo::console::error!("Failed to set connect attribute on console component.");
         }
 
         focus_console_output(&id);
@@ -928,7 +922,7 @@ async fn start_and_connect_console_view_with_command(action: &str, project: &str
     };
 
     let Some(component) = get_element("console-component") else {
-        log!("No console component found.");
+        gloo::console::error!("No console component found.");
         return;
     };
 
@@ -942,18 +936,18 @@ async fn start_and_connect_console_view_with_command(action: &str, project: &str
         .set_attribute("task_key", task_key.as_str())
         .is_err()
     {
-        log!("Failed to set task_key attribute on console component.");
+        gloo::console::error!("Failed to set task_key attribute on console component.");
     }
 
     if component.set_attribute("task_exited", "false").is_err() {
-        log!("Failed to set task_exited attribute on console component.");
+        gloo::console::error!("Failed to set task_exited attribute on console component.");
     }
 
     if component
         .set_attribute("connect", task_key.as_str())
         .is_err()
     {
-        log!("Failed to set connect attribute on console component.");
+        gloo::console::error!("Failed to set connect attribute on console component.");
     }
 
     focus_console_output(&id);
@@ -977,14 +971,12 @@ async fn connect_console_view(id: String, task_key: String, connection_id: Strin
     let ws = WebSocket::open(endpoint.as_str());
 
     if ws.is_err() {
-        log!("Failed to open websocket");
+        gloo::console::error!("Failed to open websocket");
         if is_active_console_connection(id.as_str(), task_key.as_str(), connection_id.as_str()) {
             try_inner_text("#status", "Disconnected");
         }
         return;
     }
-
-    log!("Connected websocket");
 
     let (mut ws_write, mut ws_read) = ws.unwrap().split();
     let (input_tx, mut input_rx) = mpsc::unbounded::<String>();
@@ -992,7 +984,7 @@ async fn connect_console_view(id: String, task_key: String, connection_id: Strin
     spawn_local(async move {
         while let Some(message) = input_rx.next().await {
             if let Err(err) = ws_write.send(Message::Text(message)).await {
-                log!("Failed to send websocket message", format!("{err:?}"));
+                gloo::console::error!("Failed to send websocket message", format!("{err:?}"));
                 break;
             }
         }
@@ -1011,13 +1003,13 @@ async fn connect_console_view(id: String, task_key: String, connection_id: Strin
     let json_string = match serde_json::to_string(&attach_action) {
         Ok(json) => json,
         Err(err) => {
-            log!("Failed to serialize attach action", format!("{err:?}"));
+            gloo::console::error!("Failed to serialize attach action", format!("{err:?}"));
             return;
         }
     };
 
     if let Err(err) = input_tx.unbounded_send(json_string) {
-        log!("Failed to enqueue attach action", format!("{err:?}"));
+        gloo::console::error!("Failed to enqueue attach action", format!("{err:?}"));
         return;
     }
 
@@ -1031,10 +1023,10 @@ async fn connect_console_view(id: String, task_key: String, connection_id: Strin
                 process_build_output(id.as_str(), text);
             }
             Ok(Message::Bytes(_)) => {
-                log!("Expecting string got binary data.");
+                gloo::console::error!("Expecting string got binary data.");
             }
             Err(err) => {
-                log!("WebSocket receive error", format!("{err:?}"));
+                gloo::console::error!("WebSocket receive error", format!("{err:?}"));
                 break;
             }
         }
@@ -1140,12 +1132,12 @@ fn send_stdin(stdin: String, input_tx: &mpsc::UnboundedSender<String>) {
     let json = serde_json::to_string(&action);
 
     if json.is_err() {
-        log!("Failed to create json action.");
+        gloo::console::error!("Failed to create json action.");
         return;
     }
 
     if input_tx.unbounded_send(json.unwrap()).is_err() {
-        log!("WebSocket for stdin channel is closed");
+        gloo::console::error!("WebSocket for stdin channel is closed");
     }
 }
 
@@ -1227,7 +1219,7 @@ fn setup_log_output_shortcuts(id: &str) {
     let output = match get_element_by_id(&output_id) {
         Some(output) => output,
         None => {
-            log!("No output box for log view component.");
+            gloo::console::error!("No output box for log view component.");
             return;
         }
     };
@@ -1240,7 +1232,7 @@ fn setup_log_output_shortcuts(id: &str) {
         .add_event_listener_with_callback("keydown", output_keydown.as_ref().unchecked_ref())
         .is_err()
     {
-        log!("Failed to register log output keydown handler");
+        gloo::console::error!("Failed to register log output keydown handler");
         return;
     }
 
@@ -1253,7 +1245,7 @@ fn setup_log_output_shortcuts(id: &str) {
         .add_event_listener_with_callback("click", click_focus.as_ref().unchecked_ref())
         .is_err()
     {
-        log!("Failed to register log output click handler");
+        gloo::console::error!("Failed to register log output click handler");
         return;
     }
 
@@ -1268,7 +1260,7 @@ fn setup_stdin_handler(id: &str, input_tx: mpsc::UnboundedSender<String>) {
     let output = match get_element_by_id(&output_id) {
         Some(output) => output,
         None => {
-            log!("No output box for build component.");
+            gloo::console::error!("No output box for build component.");
             return;
         }
     };
@@ -1291,7 +1283,7 @@ fn setup_stdin_handler(id: &str, input_tx: mpsc::UnboundedSender<String>) {
         .add_event_listener_with_callback("keydown", output_keydown.as_ref().unchecked_ref())
         .is_err()
     {
-        log!("Failed to register output keydown handler");
+        gloo::console::error!("Failed to register output keydown handler");
         return;
     }
 
@@ -1304,7 +1296,7 @@ fn setup_stdin_handler(id: &str, input_tx: mpsc::UnboundedSender<String>) {
         .add_event_listener_with_callback("click", click_focus.as_ref().unchecked_ref())
         .is_err()
     {
-        log!("Failed to register output click handler");
+        gloo::console::error!("Failed to register output click handler");
         return;
     }
 
@@ -1318,7 +1310,7 @@ fn process_build_output(component_id: &str, chunk: String) {
     let element = match get_element_by_id(output_id.as_str()) {
         Some(element) => element,
         None => {
-            log!("No output box for build.");
+            gloo::console::error!("No output box for build.");
             return;
         }
     };
@@ -1326,7 +1318,7 @@ fn process_build_output(component_id: &str, chunk: String) {
     let resp: std::result::Result<ActionResponse, _> = serde_json::from_str(&chunk);
 
     if resp.is_err() {
-        log!("Invalid response", chunk);
+        gloo::console::error!("Invalid response", chunk);
         return;
     }
 
@@ -1354,7 +1346,7 @@ fn process_build_output(component_id: &str, chunk: String) {
         element.set_class_name("terminal-output");
 
         let Some(component) = ConsoleComponent::get_component(component_id) else {
-            log!("No console component found for output.", component_id);
+            gloo::console::error!("No console component found for output.", component_id);
             return;
         };
 
@@ -1370,14 +1362,14 @@ fn process_build_output(component_id: &str, chunk: String) {
 
 fn handle_status(component_id: &str, line: ActionResponse) {
     if line.status.is_none() {
-        log!("No status");
+        gloo::console::error!("No status");
         return;
     }
 
     let status = line.status.unwrap();
 
     let Some(component) = get_element_by_id(component_id) else {
-        log!(
+        gloo::console::error!(
             "No console component found for status update.",
             component_id
         );
@@ -1422,7 +1414,7 @@ fn handle_status(component_id: &str, line: ActionResponse) {
             }
         }
         _ => {
-            log!("Unknown status from runner:", status.as_str());
+            gloo::console::error!("Unknown status from runner:", status.as_str());
         }
     }
 }

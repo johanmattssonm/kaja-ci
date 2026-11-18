@@ -53,7 +53,6 @@ struct ProjectStatus {
 impl Component for ProjectStatusComponent {
     fn connected(&self) {
         let id = self.get_id();
-        log!("Connected:", &id);
         self.render();
 
         let project: String = self.get_attribute("project").unwrap_or_default();
@@ -66,12 +65,12 @@ impl Component for ProjectStatusComponent {
             let element = get_element_by_id(&id_for_settings);
 
             if element.is_none() {
-                log!("Missing component.");
+                gloo::console::error!("Missing component.");
                 return;
             }
 
             if settings.is_none() {
-                log!("Missing settings.");
+                gloo::console::error!("Missing settings.");
                 return;
             }
 
@@ -119,9 +118,7 @@ impl Component for ProjectStatusComponent {
         });
     }
 
-    fn disconnected(&self) {
-        log!("Disconnected:", self.get_id());
-    }
+    fn disconnected(&self) {}
 
     fn attribute_changed(&self, name: &str, _old_value: &str, _new_value: &str) {
         if name == "project"
@@ -149,7 +146,7 @@ impl ProjectStatusComponent {
         let element = match get_element_by_id(&id) {
             Some(element) => element,
             None => {
-                log!("No root element for build component");
+                gloo::console::error!("No root element for build component");
                 return;
             }
         };
@@ -347,13 +344,13 @@ async fn run_all(project: String) {
         Ok(body) => {
             if let Ok(parsed) = serde_json::from_str::<RunAllResponse>(body.as_str()) {
                 if parsed.ok {
-                    log!("Running all tasks.");
+                    gloo::console::error!("Running all tasks.");
                     return;
                 }
 
                 parsed.message.unwrap_or(fallback_message)
             } else if request_ok {
-                log!("Running all tasks.");
+                gloo::console::error!("Running all tasks.");
                 return;
             } else if body.trim().is_empty() {
                 fallback_message
@@ -363,7 +360,7 @@ async fn run_all(project: String) {
         }
         Err(_) => {
             if request_ok {
-                log!("Running all tasks.");
+                gloo::console::error!("Running all tasks.");
                 return;
             }
 
@@ -390,7 +387,7 @@ async fn load_settings(project: &str) -> Option<BuildCommands> {
     let response = match auth::get(endpoint.as_str()).await {
         Ok(response) => response,
         Err(_) => {
-            log!("Failed to load settings.");
+            gloo::console::error!("Failed to load settings.");
             return None;
         }
     };
@@ -398,7 +395,7 @@ async fn load_settings(project: &str) -> Option<BuildCommands> {
     let body = match response.text().await {
         Ok(body) => body,
         Err(_) => {
-            log!("#save-status", "Failed to read settings response.");
+            gloo::console::error!("#save-status", "Failed to read settings response.");
             return None;
         }
     };
@@ -406,7 +403,7 @@ async fn load_settings(project: &str) -> Option<BuildCommands> {
     match serde_json::from_str::<BuildCommands>(body.as_str()) {
         Ok(commands) => return Some(commands),
         Err(_) => {
-            log!("#save-status", "Failed to parse settings response.");
+            gloo::console::error!("#save-status", "Failed to parse settings response.");
             return None;
         }
     }
@@ -418,7 +415,7 @@ async fn load_branch(project: &str) -> String {
     let response = match auth::get(endpoint.as_str()).await {
         Ok(response) => response,
         Err(_) => {
-            log!("Failed to load branch.");
+            gloo::console::error!("Failed to load branch.");
             return "no-git".to_string();
         }
     };
@@ -426,7 +423,7 @@ async fn load_branch(project: &str) -> String {
     let body = match response.text().await {
         Ok(body) => body,
         Err(_) => {
-            log!("Failed to read branch response.");
+            gloo::console::error!("Failed to read branch response.");
             return "no-git".to_string();
         }
     };
@@ -442,7 +439,7 @@ async fn load_branch(project: &str) -> String {
         }
         Ok(branch_response) => {
             if let Some(message) = branch_response.message {
-                log!("Branch unavailable", message);
+                gloo::console::error!("Branch unavailable", message);
             }
 
             let branch = branch_response.branch.trim();
@@ -453,7 +450,7 @@ async fn load_branch(project: &str) -> String {
             }
         }
         Err(_) => {
-            log!("Failed to parse branch response.");
+            gloo::console::error!("Failed to parse branch response.");
             "no-git".to_string()
         }
     }

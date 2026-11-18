@@ -75,7 +75,6 @@ struct BuildStatus {
 impl Component for BuildStatusComponent {
     fn connected(&self) {
         let id = self.get_id();
-        log!("Connected:", &id);
         self.render();
 
         let project = self.get_attribute::<String>("project").unwrap_or_default();
@@ -100,7 +99,6 @@ impl Component for BuildStatusComponent {
 
     fn disconnected(&self) {
         let id = self.get_id();
-        log!("Disconnected:", &id);
         let project = self.get_attribute::<String>("project").unwrap_or_default();
         remove_build_status_connection(id.as_str(), Some(project.as_str()));
     }
@@ -153,12 +151,12 @@ fn ensure_build_status_page_handlers() {
     };
 
     let Some(pause_connections) = get_callback("pauseBuildStatusConnections") else {
-        log!("Missing pauseBuildStatusConnections callback.");
+        gloo::console::error!("Missing pauseBuildStatusConnections callback.");
         return;
     };
 
     let Some(resume_connections) = get_callback("resumeBuildStatusConnections") else {
-        log!("Missing resumeBuildStatusConnections callback.");
+        gloo::console::error!("Missing resumeBuildStatusConnections callback.");
         return;
     };
 
@@ -174,7 +172,7 @@ fn ensure_build_status_page_handlers() {
         .is_ok();
 
     if !pagehide || !pageshow {
-        log!("Failed to register build status page lifecycle handlers.");
+        gloo::console::error!("Failed to register build status page lifecycle handlers.");
     }
 }
 
@@ -281,7 +279,7 @@ fn connect_task_ws(project: String, abort_registration: futures_util::future::Ab
         let ws = WebSocket::open(endpoint.as_str());
 
         let Ok(ws) = ws else {
-            log!("Failed to open task websocket");
+            gloo::console::error!("Failed to open task websocket");
             BUILD_STATUS_WS_BY_PROJECT.with(|sockets| {
                 sockets.borrow_mut().remove(project.as_str());
             });
@@ -296,8 +294,6 @@ fn connect_task_ws(project: String, abort_registration: futures_util::future::Ab
                 let Ok(Message::Text(text)) = message else {
                     continue;
                 };
-
-                log!("task status", &text);
 
                 let Ok(status) = serde_json::from_str::<TaskRunningStatus>(text.as_str()) else {
                     continue;
@@ -645,7 +641,7 @@ fn render_status(id: &str, href: &str, label: &str) {
     let element = match get_element_by_id(id) {
         Some(element) => element,
         None => {
-            log!("No root element for build status");
+            gloo::console::error!("No root element for build status");
             return;
         }
     };
