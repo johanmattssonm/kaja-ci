@@ -1,7 +1,5 @@
 use actix_files as fs;
-use actix_web::dev::Service;
-use actix_web::{App, HttpResponse, HttpServer, web};
-use futures_util::future::{Either, ready};
+use actix_web::{App, HttpServer, web};
 use std::io;
 use std::path::PathBuf;
 
@@ -38,7 +36,7 @@ fn favicon_ico_path() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../public/favicon.ico")
 }
 
-pub async fn run_server(session_key: String) -> io::Result<()> {
+pub async fn run_server(_session_key: String) -> io::Result<()> {
     settingsfile::ensure_kaja_ci_dirs_exist().map_err(io::Error::other)?;
     app::ensure_log_base_dir_exists()?;
     taskrunner::start_scheduler();
@@ -46,30 +44,8 @@ pub async fn run_server(session_key: String) -> io::Result<()> {
     let pkg_dir = frontend_pkg_dir();
     let fonts_dir = font_dir();
     let favicon_ico = favicon_ico_path();
-    let auth_state = web::Data::new(auth::AppAuth::new(session_key));
-
     HttpServer::new(move || {
         App::new()
-            .app_data(auth_state.clone())
-            .wrap_fn(|req, srv| {
-                let path = req.path().to_string();
-                let public_path = path == "/"
-                    || path.starts_with("/pkg/")
-                    || path == "/pkg"
-                    || path.starts_with("/font/")
-                    || path == "/font"
-                    || path == "/favicon.ico";
-
-                if public_path {
-                    Either::Left(srv.call(req))
-                } else if let Some(message) = auth::authorization_failure_message(req.request()) {
-                    Either::Right(ready(Ok(
-                        req.into_response(HttpResponse::Unauthorized().body(message))
-                    )))
-                } else {
-                    Either::Left(srv.call(req))
-                }
-            })
             .service(fs::Files::new("/pkg", pkg_dir.clone()))
             .service(fs::Files::new("/font", fonts_dir.clone()))
             .route(
