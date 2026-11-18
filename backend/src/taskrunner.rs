@@ -1,10 +1,10 @@
 use actix_web::http::header::ContentType;
 use actix_web::{Error, HttpRequest, HttpResponse, Responder, web};
 use actix_ws::{Message, handle};
-use chrono::{Local, SecondsFormat, Timelike};
+use chrono::{Local, SecondsFormat, TimeZone, Timelike};
 use serde::{Deserialize, Serialize};
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::fs::{self, OpenOptions};
 use std::io::Write;
 use std::path::PathBuf;
@@ -37,6 +37,8 @@ pub struct TaskRunningStatus {
 static TASK_STATUS_TX: OnceLock<broadcast::Sender<String>> = OnceLock::new();
 static LAST_TASK_STATUS: OnceLock<StdRwLock<Option<String>>> = OnceLock::new();
 static RUN_ALL_RUNNING_PROJECTS: OnceLock<Mutex<HashSet<String>>> = OnceLock::new();
+static RUN_ALL_PENDING_PROJECT_COUNTS: OnceLock<Mutex<HashMap<String, usize>>> = OnceLock::new();
+static RUN_ALL_PENDING_WORKERS: OnceLock<Mutex<HashSet<String>>> = OnceLock::new();
 static SCHEDULER_LAST_KEYS: OnceLock<Mutex<HashSet<String>>> = OnceLock::new();
 static SCHEDULER_RELOAD_TX: OnceLock<broadcast::Sender<()>> = OnceLock::new();
 static START_SCHEDULER_ONCE: Once = Once::new();
@@ -65,6 +67,14 @@ fn scheduler_reload_channel() -> &'static broadcast::Sender<()> {
         let (tx, _) = broadcast::channel::<()>(16);
         tx
     })
+}
+
+fn run_all_pending_project_counts() -> &'static Mutex<HashMap<String, usize>> {
+    RUN_ALL_PENDING_PROJECT_COUNTS.get_or_init(|| Mutex::new(HashMap::new()))
+}
+
+fn run_all_pending_workers() -> &'static Mutex<HashSet<String>> {
+    RUN_ALL_PENDING_WORKERS.get_or_init(|| Mutex::new(HashSet::new()))
 }
 
 pub fn notify_scheduler_reload() {
@@ -106,6 +116,137 @@ pub fn start_scheduler() {
     });
 }
 
+#[derive(Serialize, Deserialize, Default)]
+struct SchedulerState {
+    #[serde(default)]
+    last_checked_minute_epoch: Option<i64>,
+}
+
+fn scheduler_state_path() -> Option<PathBuf> {
+    crate::settingsfile::kaja_ci_base_dir()
+        .ok()
+        .map(|base_dir| base_dir.join("scheduler-state.json"))
+}
+
+fn load_scheduler_state() -> SchedulerState {
+    let Some(path) = scheduler_state_path() else {
+        return SchedulerState::default();
+    };
+
+    let Ok(content) = std::fs::read_to_string(path.as_path()) else {
+        return SchedulerState::default();
+    };
+
+    serde_json::from_str::<SchedulerState>(content.as_str()).unwrap_or_default()
+}
+
+fn save_scheduler_state(state: &SchedulerState) {
+    let Some(path) = scheduler_state_path() else {
+        return;
+    };
+
+    let Ok(content) = serde_json::to_string_pretty(state) else {
+        return;
+    };
+
+    let _ = std::fs::write(path.as_path(), content);
+}
+
+fn parse_hhmm(at: &str) -> Option<(u32, u32)> {
+    let mut parts = at.split(':');
+    let hour = parts.next()?.parse::<u32>().ok()?;
+    let minute = parts.next()?.parse::<u32>().ok()?;
+
+    if parts.next().is_some() || hour > 23 || minute > 59 {
+        return None;
+    }
+
+    Some((hour, minute))
+}
+
+fn count_missed_daily_runs(from_minute_epoch: i64, to_minute_epoch: i64, at: &str) -> usize {
+    if from_minute_epoch >= to_minute_epoch {
+        return 0;
+    }
+
+    let Some((hour, minute)) = parse_hhmm(at) else {
+        return 0;
+    };
+
+    let mut count = 0usize;
+
+    for minute_epoch in (from_minute_epoch + 1)..=to_minute_epoch {
+        let Some(dt) = Local.timestamp_opt(minute_epoch * 60, 0).single() else {
+            continue;
+        };
+
+        if dt.hour() == hour && dt.minute() == minute {
+            count += 1;
+        }
+    }
+
+    count
+}
+
+fn queue_run_all_for_project(project: String, count: usize) {
+    if count == 0 || project.trim().is_empty() {
+        return;
+    }
+
+    {
+        let Ok(mut pending_counts) = run_all_pending_project_counts().lock() else {
+            return;
+        };
+
+        let entry = pending_counts.entry(project.clone()).or_insert(0);
+        *entry = entry.saturating_add(count);
+    }
+
+    let should_start_worker = {
+        let Ok(mut workers) = run_all_pending_workers().lock() else {
+            return;
+        };
+
+        workers.insert(project.clone())
+    };
+
+    if !should_start_worker {
+        return;
+    }
+
+    actix_web::rt::spawn(async move {
+        loop {
+            let has_job = {
+                match run_all_pending_project_counts().lock() {
+                    Ok(mut pending_counts) => match pending_counts.get_mut(project.as_str()) {
+                        Some(remaining) => {
+                            if *remaining == 0 {
+                                pending_counts.remove(project.as_str());
+                                false
+                            } else {
+                                *remaining -= 1;
+                                true
+                            }
+                        }
+                        None => false,
+                    },
+                    Err(_) => false,
+                }
+            };
+
+            if !has_job {
+                break;
+            }
+
+            let _ = run_all_for_project(project.clone()).await;
+        }
+
+        if let Ok(mut workers) = run_all_pending_workers().lock() {
+            workers.remove(project.as_str());
+        }
+    });
+}
+
 async fn run_due_scheduled_runs_once() {
     let settings = match clone::load_settings() {
         Ok(settings) => settings,
@@ -113,8 +254,13 @@ async fn run_due_scheduled_runs_once() {
     };
 
     let now = Local::now();
+    let now_minute_epoch = now.timestamp().div_euclid(60);
     let minute_key = now.format("%Y-%m-%d %H:%M").to_string();
-    let now_hhmm = now.format("%H:%M").to_string();
+
+    let mut scheduler_state = load_scheduler_state();
+    let from_minute_epoch = scheduler_state
+        .last_checked_minute_epoch
+        .unwrap_or(now_minute_epoch - 1);
 
     if let Ok(mut seen) = scheduler_last_keys().lock()
         && seen.len() > 5_000
@@ -122,40 +268,42 @@ async fn run_due_scheduled_runs_once() {
         seen.clear();
     }
 
-    let mut due_projects = Vec::<String>::new();
+    let mut due_project_counts = HashMap::<String, usize>::new();
 
     for project in settings.projects {
         let scheduled = load_scheduled_run_rows(project.as_str());
         for schedule in scheduled {
             let frequency = schedule.frequency.to_lowercase();
-            let is_due = frequency == "daily" && schedule.at == now_hhmm;
-
-            if !is_due {
+            if frequency != "daily" {
                 continue;
             }
 
             let trigger_key = format!("{}|{}|{}|{}", project, frequency, schedule.at, minute_key);
 
-            let should_trigger = scheduler_last_keys()
+            let should_count_current_minute = scheduler_last_keys()
                 .lock()
                 .map(|mut seen| seen.insert(trigger_key))
                 .unwrap_or(false);
 
-            if should_trigger {
-                due_projects.push(project.clone());
+            let mut due_count =
+                count_missed_daily_runs(from_minute_epoch, now_minute_epoch, schedule.at.as_str());
+
+            if !should_count_current_minute && due_count > 0 {
+                due_count -= 1;
+            }
+
+            if due_count > 0 {
+                let entry = due_project_counts.entry(project.clone()).or_insert(0);
+                *entry = entry.saturating_add(due_count);
             }
         }
     }
 
-    if due_projects.is_empty() {
-        return;
-    }
+    scheduler_state.last_checked_minute_epoch = Some(now_minute_epoch);
+    save_scheduler_state(&scheduler_state);
 
-    due_projects.sort();
-    due_projects.dedup();
-
-    for project in due_projects {
-        run_all_for_project(project).await;
+    for (project, due_count) in due_project_counts {
+        queue_run_all_for_project(project, due_count);
     }
 }
 
