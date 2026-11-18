@@ -7,7 +7,8 @@ use gloo_net::http::Request;
 use kaja_web::prelude::*;
 use std::collections::HashMap;
 
-use wasm_bindgen::JsCast;
+use wasm_bindgen::{JsCast, JsValue, prelude::Closure};
+use wasm_bindgen_futures::JsFuture;
 use web_sys::{Element, HtmlInputElement};
 
 #[component("project-settings")]
@@ -267,7 +268,7 @@ impl SettingsComponent {
                 </rust>
             </div>
 
-            <button onclick="saveSettings('$id')">Save</button>
+            <button id="save-button-$id" class="settings-save-button" onclick="saveSettings('$id')">Save</button>
         }};
 
         element.set_inner_html(content.as_str());
@@ -580,12 +581,18 @@ async fn save_settings(id: String) {
         run_all: None,
     };
 
+    set_save_button_loading(id.as_str(), true);
+    let save_started_at = js_sys::Date::now();
+
     let endpoint = format!("/save-settings?project={}", project);
     let request = auth::with_auth_header(Request::post(endpoint.as_str())).await;
     let result = match request.json(&settings) {
         Ok(request) => request.send().await,
         Err(_) => {
             try_inner_text("#save-status", "Failed to build save request.");
+            ensure_minimum_save_spinner_duration(save_started_at).await;
+            set_save_button_loading(id.as_str(), false);
+            component.render();
             return;
         }
     };
@@ -617,7 +624,73 @@ async fn save_settings(id: String) {
         try_inner_text("#save-status", "Failed to save settings.");
     }
 
+    ensure_minimum_save_spinner_duration(save_started_at).await;
+    set_save_button_loading(id.as_str(), false);
     component.render();
+}
+
+fn set_save_button_loading(component_id: &str, loading: bool) {
+    let Some(window) = web_sys::window() else {
+        return;
+    };
+
+    let Some(document) = window.document() else {
+        return;
+    };
+
+    let selector = format!("#save-button-{}", component_id);
+    let Ok(Some(button)) = document.query_selector(selector.as_str()) else {
+        return;
+    };
+
+    if loading {
+        button.set_inner_html(
+            "<span class=\"ci-icon settings-save-spinner\">⟳</span><span>Save</span>",
+        );
+        let _ = button.set_attribute("disabled", "true");
+    } else {
+        button.set_inner_html("Save");
+        let _ = button.remove_attribute("disabled");
+    }
+}
+
+async fn ensure_minimum_save_spinner_duration(started_at_ms: f64) {
+    let elapsed_ms = js_sys::Date::now() - started_at_ms;
+    let remaining_ms = (300.0 - elapsed_ms).ceil() as i32;
+
+    if remaining_ms > 0 {
+        wait_ms(remaining_ms).await;
+    }
+}
+
+async fn wait_ms(timeout_ms: i32) {
+    if timeout_ms <= 0 {
+        return;
+    }
+
+    let promise = js_sys::Promise::new(&mut |resolve, _reject| {
+        let Some(window) = web_sys::window() else {
+            let _ = resolve.call0(&JsValue::NULL);
+            return;
+        };
+
+        let resolve_for_callback = resolve.clone();
+        let callback = Closure::once_into_js(move || {
+            let _ = resolve_for_callback.call0(&JsValue::NULL);
+        });
+
+        if window
+            .set_timeout_with_callback_and_timeout_and_arguments_0(
+                callback.unchecked_ref(),
+                timeout_ms,
+            )
+            .is_err()
+        {
+            let _ = resolve.call0(&JsValue::NULL);
+        }
+    });
+
+    let _ = JsFuture::from(promise).await;
 }
 
 #[callback("moveTaskUp")]

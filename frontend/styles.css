@@ -187,6 +187,33 @@ button:hover {
     background: #1b1b1b;
 }
 
+.settings-save-button {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+}
+
+.settings-save-button:disabled {
+    cursor: wait;
+    opacity: 0.85;
+}
+
+.settings-save-spinner {
+    display: inline-block;
+    font-family: "Kaja CI", "Kaja CI Mac";
+    animation: settings-save-spin 700ms linear infinite;
+}
+
+@keyframes settings-save-spin {
+    from {
+        transform: rotate(0deg);
+    }
+
+    to {
+        transform: rotate(360deg);
+    }
+}
+
 .setting-row-label {
     display: flex;
     align-items: center;

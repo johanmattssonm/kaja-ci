@@ -60,12 +60,14 @@ pub async fn run_server(session_key: String) -> io::Result<()> {
                     || path == "/font"
                     || path == "/favicon.ico";
 
-                if public_path || auth::is_authorized(req.request()) {
+                if public_path {
                     Either::Left(srv.call(req))
-                } else {
+                } else if let Some(message) = auth::authorization_failure_message(req.request()) {
                     Either::Right(ready(Ok(
-                        req.into_response(HttpResponse::Unauthorized().body("Unauthorized"))
+                        req.into_response(HttpResponse::Unauthorized().body(message))
                     )))
+                } else {
+                    Either::Left(srv.call(req))
                 }
             })
             .service(fs::Files::new("/pkg", pkg_dir.clone()))

@@ -4,3 +4,4 @@ pkg/
 node_modules/
 TODO
 dist/
+buildmac.sh

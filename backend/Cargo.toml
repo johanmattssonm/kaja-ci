@@ -18,5 +18,5 @@ serde = { version = "1.0.229", features = ["derive", "serde_derive"] }
 serde_json = "1.0.154"
 chrono = { version = "0.4", default-features = false, features = ["clock"] }
 shell-words = "1.1.1"
-git2 = "0.20"
+git2 = { version = "0.20", features = ["vendored-libgit2", "vendored-openssl"] }
 futures-util = "0.3"

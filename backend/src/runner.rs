@@ -17,6 +17,8 @@ use tokio::sync::{Mutex, broadcast, mpsc};
 
 const TASK_IDLE_TIMEOUT_SECONDS: u64 = 60 * 60;
 const TASK_IDLE_CHECK_INTERVAL_SECONDS: u64 = 30;
+const TERMINAL_PTY_ROWS: u16 = 20;
+const TERMINAL_PTY_COLS: u16 = 113;
 
 #[path = "../../frontend/src/rest.rs"]
 mod rest;
@@ -1389,11 +1391,13 @@ fn find_custom_command_by_label(config_commands: &BuildCommands, label: &str) ->
         })
 }
 
-fn apply_terminal_env(cmd: &mut CommandBuilder) {
+fn apply_terminal_env(cmd: &mut CommandBuilder, rows: u16, cols: u16) {
     cmd.env("TERM", "xterm-256color");
     cmd.env("COLORTERM", "truecolor");
     cmd.env("CLICOLOR", "1");
     cmd.env("CLICOLOR_FORCE", "1");
+    cmd.env("LINES", rows.to_string());
+    cmd.env("COLUMNS", cols.to_string());
 }
 
 fn should_force_ls_color(program: &str, args: &[String]) -> bool {
@@ -1493,7 +1497,7 @@ fn parse_command(command: Option<String>, folder: &str) -> Result<CommandBuilder
     };
 
     cmd.cwd(folder);
-    apply_terminal_env(&mut cmd);
+    apply_terminal_env(&mut cmd, TERMINAL_PTY_ROWS, TERMINAL_PTY_COLS);
     Ok(cmd)
 }
 
@@ -1676,8 +1680,8 @@ async fn start_detached_action(
     };
 
     let pty_system = native_pty_system();
-    let rows = 30u16;
-    let cols = 120u16;
+    let rows = TERMINAL_PTY_ROWS;
+    let cols = TERMINAL_PTY_COLS;
 
     let pty_pair = match pty_system.openpty(PtySize {
         rows,
@@ -2088,8 +2092,8 @@ async fn start_build(
 
     let pty_system = native_pty_system();
 
-    let rows = 30u16;
-    let cols = 120u16;
+    let rows = TERMINAL_PTY_ROWS;
+    let cols = TERMINAL_PTY_COLS;
 
     let pty_pair = match pty_system.openpty(PtySize {
         rows,
