@@ -1,8 +1,4 @@
 use std::path::{Path, PathBuf};
-use std::process::Command;
-
-#[path = "../../frontend/src/rest.rs"]
-mod rest;
 
 use crate::settingsfile::{
     AppSettings, kaja_ci_base_dir, kaja_ci_projects_dir, kaja_ci_settings_path,
@@ -10,7 +6,7 @@ use crate::settingsfile::{
 use actix_web::http::header::ContentType;
 use actix_web::{HttpResponse, Responder, web};
 use kaja_html_macro::html;
-use rest::default_terminal_command;
+
 use serde::Deserialize;
 
 #[derive(Debug, Deserialize)]
@@ -100,6 +96,28 @@ pub fn add_existing_project(project_path: &str) -> Result<PathBuf, String> {
     ensure_project_ci_defaults(canonical.as_path())?;
 
     Ok(canonical)
+}
+
+fn default_terminal_command() -> String {
+    #[cfg(target_os = "windows")]
+    {
+        return "powershell".to_string();
+    }
+
+    #[cfg(target_os = "macos")]
+    {
+        return "zsh".to_string();
+    }
+
+    #[cfg(target_os = "linux")]
+    {
+        return "bash".to_string();
+    }
+
+    #[cfg(not(any(target_os = "windows", target_os = "macos", target_os = "linux")))]
+    {
+        "bash".to_string()
+    }
 }
 
 pub fn default_ci_json_value() -> serde_json::Value {
@@ -214,34 +232,6 @@ fn repo_name(repo_url: &str) -> Result<String, String> {
     Ok(name.to_string())
 }
 
-pub fn parse_repo_input(value: &str) -> Result<String, String> {
-    let value = value.trim();
-
-    if value.is_empty() {
-        return Err("Repository URL is empty".to_string());
-    }
-
-    if value.starts_with("git clone") {
-        let parts: Vec<&str> = value.split_whitespace().collect();
-
-        if parts.len() < 3 {
-            return Err("Invalid clone command. Expected: git clone <repo-url>".to_string());
-        }
-
-        for candidate in parts.into_iter().skip(2) {
-            if candidate.starts_with('-') {
-                continue;
-            }
-
-            return Ok(candidate.to_string());
-        }
-
-        return Err("Invalid clone command. Missing repository URL".to_string());
-    }
-
-    Ok(value.to_string())
-}
-
 pub fn clone_command_from_input(value: &str) -> Result<String, String> {
     let value = value.trim();
 
@@ -254,33 +244,6 @@ pub fn clone_command_from_input(value: &str) -> Result<String, String> {
     }
 
     Ok(format!("git clone {value}"))
-}
-
-pub fn clone_repo(repo_url: &str) -> Result<PathBuf, String> {
-    let projects_dir = kaja_ci_projects_dir()?;
-    std::fs::create_dir_all(projects_dir.as_path())
-        .map_err(|err| format!("Failed to create {}: {err}", projects_dir.display()))?;
-
-    let target_dir = projects_dir.join(repo_name(repo_url)?.as_str());
-
-    if !target_dir.exists() {
-        let output = Command::new("git")
-            .arg("clone")
-            .arg(repo_url)
-            .arg(target_dir.as_os_str())
-            .output()
-            .map_err(|err| format!("Failed to run git clone: {err}"))?;
-
-        if !output.status.success() {
-            let stderr = String::from_utf8_lossy(output.stderr.as_slice()).to_string();
-            return Err(format!("git clone failed: {}", stderr.trim()));
-        }
-    }
-
-    ensure_project_in_settings(target_dir.as_path())?;
-    ensure_project_ci_defaults(target_dir.as_path())?;
-
-    Ok(target_dir)
 }
 
 pub(crate) fn clone_page(params: &CloneParams, compact: bool) -> HttpResponse {

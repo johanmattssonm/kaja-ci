@@ -127,7 +127,6 @@ impl Component for ConsoleComponent {
     }
 
     fn disconnected(&self) {
-        let id = self.get_id();
         let action: String = self.get_attribute("action").unwrap_or_default();
 
         if action != "terminal" {
@@ -570,7 +569,7 @@ async fn start_task(project: &str, action: &str, command: Option<&str>) -> Optio
     None
 }
 
-fn render_running_task_status(message: &str, running_task_key: &str, project: &str) {
+fn render_running_task_status(_message: &str, running_task_key: &str, project: &str) {
     let Some(status) = get_element("#status") else {
         return;
     };

@@ -18,8 +18,6 @@ enum TaskAttribute {
 struct TaskDetails {
     task: Option<String>,
     label: Option<String>,
-    order: Option<i32>,
-    custom: Option<bool>,
 }
 
 #[component("project-status")]

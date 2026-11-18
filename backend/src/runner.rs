@@ -27,8 +27,6 @@ use crate::clone::{
 };
 use rest::{Action, ActionResponse, BuildCommands};
 
-pub const BUILD_DIR: &str = "/home/johan/Downloads/resting-chair";
-
 #[derive(Deserialize)]
 pub struct ProjectGetParams {
     pub project: String,
@@ -906,6 +904,7 @@ fn is_terminal_action(action: &str) -> bool {
     action == "terminal"
 }
 
+#[cfg(test)]
 fn is_terminal_task_key(task_key: &str) -> bool {
     task_key.starts_with("terminal-")
 }
