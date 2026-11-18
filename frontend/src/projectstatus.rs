@@ -344,13 +344,11 @@ async fn run_all(project: String) {
         Ok(body) => {
             if let Ok(parsed) = serde_json::from_str::<RunAllResponse>(body.as_str()) {
                 if parsed.ok {
-                    gloo::console::error!("Running all tasks.");
                     return;
                 }
 
                 parsed.message.unwrap_or(fallback_message)
             } else if request_ok {
-                gloo::console::error!("Running all tasks.");
                 return;
             } else if body.trim().is_empty() {
                 fallback_message
@@ -360,7 +358,6 @@ async fn run_all(project: String) {
         }
         Err(_) => {
             if request_ok {
-                gloo::console::error!("Running all tasks.");
                 return;
             }
 
