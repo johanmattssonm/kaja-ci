@@ -84,6 +84,26 @@ fn clear_project_folder_error() {
     set_project_folder_error("");
 }
 
+fn update_project_folder_picker_visibility() {
+    let Some(window) = web_sys::window() else {
+        return;
+    };
+
+    let Some(document) = window.document() else {
+        return;
+    };
+
+    let Some(element) = document.get_element_by_id("add-project-folder-picker") else {
+        return;
+    };
+
+    if !crate::tauri::is_available() {
+        if let Ok(html_element) = element.dyn_into::<web_sys::HtmlElement>() {
+            let _ = html_element.style().set_property("display", "none");
+        }
+    }
+}
+
 #[wasm_bindgen(start)]
 pub fn init() {
     std::panic::set_hook(Box::new(console_error_panic_hook::hook));
@@ -94,4 +114,5 @@ pub fn init() {
     });
 
     init_callbacks();
+    update_project_folder_picker_visibility();
 }
