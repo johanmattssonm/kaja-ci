@@ -16,12 +16,15 @@ use wasm_bindgen_futures::spawn_local;
 thread_local! {
     static BUILD_STATUS_COMPONENT_IDS: RefCell<HashSet<String>> = RefCell::new(HashSet::new());
     static BUILD_STATUS_COMPONENT_BY_PROJECT: RefCell<HashMap<String, String>> = RefCell::new(HashMap::new());
+    static BUILD_STATUS_CACHE_BY_PROJECT: RefCell<HashMap<String, CachedBuildStatus>> = RefCell::new(HashMap::new());
+    static BUILD_STATUS_FETCH_IN_FLIGHT: RefCell<HashSet<String>> = RefCell::new(HashSet::new());
+    static BUILD_STATUS_WS_BY_PROJECT: RefCell<HashMap<String, AbortHandle>> = RefCell::new(HashMap::new());
 }
 
-#[derive(Debug)]
-struct BuildStatusConnection {
-    project: String,
-    abort_handle: Option<AbortHandle>,
+#[derive(Debug, Clone)]
+struct CachedBuildStatus {
+    href: String,
+    label: String,
 }
 
 #[derive(Deserialize, Debug)]
@@ -67,8 +70,6 @@ struct LatestLogMetadata {
 struct BuildStatus {
     #[attribute]
     pub project: String,
-
-    connection: Option<BuildStatusConnection>,
 }
 
 impl Component for BuildStatusComponent {
@@ -88,19 +89,20 @@ impl Component for BuildStatusComponent {
 
         if let Some(previous_id) = previous_id {
             if previous_id != id {
-                remove_build_status_connection(previous_id.as_str());
+                remove_build_status_connection(previous_id.as_str(), Some(project.as_str()));
             }
         }
 
         ensure_build_status_page_handlers();
         load_latest_build_status(id.clone(), project.clone());
-        start_build_status_connection(id, project);
+        start_build_status_connection(project);
     }
 
     fn disconnected(&self) {
         let id = self.get_id();
         log!("Disconnected:", &id);
-        remove_build_status_connection(id.as_str());
+        let project = self.get_attribute::<String>("project").unwrap_or_default();
+        remove_build_status_connection(id.as_str(), Some(project.as_str()));
     }
 
     fn attribute_changed(&self, name: &str, old_value: &str, _new_value: &str) {
@@ -125,12 +127,16 @@ impl Component for BuildStatusComponent {
 
         if let Some(previous_id) = previous_id {
             if previous_id != id {
-                remove_build_status_connection(previous_id.as_str());
+                remove_build_status_connection(previous_id.as_str(), Some(project.as_str()));
             }
         }
 
+        if !old_value.is_empty() && old_value != project {
+            stop_build_status_connection_if_unused(old_value);
+        }
+
         load_latest_build_status(id.clone(), project.clone());
-        start_build_status_connection(id, project);
+        start_build_status_connection(project);
     }
 }
 
@@ -188,7 +194,7 @@ fn resume_build_status_connections(_event: web_sys::Event) {
 
         let project: String = component.get_attribute("project").unwrap_or_default();
         load_latest_build_status(id.clone(), project.clone());
-        start_build_status_connection(id, project);
+        start_build_status_connection(project);
     }
 }
 
@@ -197,20 +203,17 @@ fn build_status_component_ids() -> Vec<String> {
 }
 
 fn pause_build_status_connection(id: &str) {
-    let Some(component) = BuildStatusComponent::get_component(id) else {
+    let project = BuildStatusComponent::get_component(id)
+        .and_then(|component| component.get_attribute::<String>("project"));
+
+    let Some(project) = project.filter(|value| !value.is_empty()) else {
         return;
     };
 
-    let mut component = component.borrow_mut();
-
-    if let Some(connection) = component.connection.as_mut() {
-        if let Some(handle) = connection.abort_handle.take() {
-            handle.abort();
-        }
-    }
+    stop_build_status_connection(project.as_str());
 }
 
-fn remove_build_status_connection(id: &str) {
+fn remove_build_status_connection(id: &str, project_hint: Option<&str>) {
     BUILD_STATUS_COMPONENT_IDS.with(|ids| {
         ids.borrow_mut().remove(id);
     });
@@ -221,53 +224,52 @@ fn remove_build_status_connection(id: &str) {
             .retain(|_, component_id| component_id != id);
     });
 
-    let Some(component) = BuildStatusComponent::get_component(id) else {
-        return;
-    };
-
-    let mut component = component.borrow_mut();
-
-    if let Some(connection) = component.connection.as_mut() {
-        if let Some(handle) = connection.abort_handle.take() {
-            handle.abort();
-        }
+    if let Some(project) = project_hint.filter(|value| !value.is_empty()) {
+        stop_build_status_connection_if_unused(project);
     }
 }
 
-fn start_build_status_connection(id: String, project: String) {
-    let Some(component) = BuildStatusComponent::get_component(id.as_str()) else {
+fn stop_build_status_connection_if_unused(project: &str) {
+    let still_used = BUILD_STATUS_COMPONENT_BY_PROJECT
+        .with(|by_project| by_project.borrow().contains_key(project));
+
+    if still_used {
         return;
-    };
+    }
 
-    let abort_registration = {
-        let mut component = component.borrow_mut();
-
-        let entry = component
-            .connection
-            .get_or_insert_with(|| BuildStatusConnection {
-                project: project.clone(),
-                abort_handle: None,
-            });
-
-        entry.project = project.clone();
-
-        if let Some(handle) = entry.abort_handle.take() {
-            handle.abort();
-        }
-
-        let (abort_handle, abort_registration) = AbortHandle::new_pair();
-        entry.abort_handle = Some(abort_handle);
-        abort_registration
-    };
-
-    connect_task_ws(id, project, abort_registration);
+    stop_build_status_connection(project);
 }
 
-fn connect_task_ws(
-    id: String,
-    project: String,
-    abort_registration: futures_util::future::AbortRegistration,
-) {
+fn stop_build_status_connection(project: &str) {
+    let handle = BUILD_STATUS_WS_BY_PROJECT.with(|sockets| sockets.borrow_mut().remove(project));
+
+    if let Some(handle) = handle {
+        handle.abort();
+    }
+}
+
+fn start_build_status_connection(project: String) {
+    if project.is_empty() {
+        return;
+    }
+
+    let has_connection =
+        BUILD_STATUS_WS_BY_PROJECT.with(|sockets| sockets.borrow().contains_key(project.as_str()));
+
+    if has_connection {
+        return;
+    }
+
+    let (abort_handle, abort_registration) = AbortHandle::new_pair();
+
+    BUILD_STATUS_WS_BY_PROJECT.with(|sockets| {
+        sockets.borrow_mut().insert(project.clone(), abort_handle);
+    });
+
+    connect_task_ws(project, abort_registration);
+}
+
+fn connect_task_ws(project: String, abort_registration: futures_util::future::AbortRegistration) {
     spawn_local(async move {
         let endpoint = format!(
             "ws://127.0.0.1:2003/task?project={}",
@@ -280,10 +282,14 @@ fn connect_task_ws(
 
         let Ok(ws) = ws else {
             log!("Failed to open task websocket");
+            BUILD_STATUS_WS_BY_PROJECT.with(|sockets| {
+                sockets.borrow_mut().remove(project.as_str());
+            });
             return;
         };
 
         let (_write, mut read) = ws.split();
+        let project_for_messages = project.clone();
 
         let read_messages = async move {
             while let Some(message) = read.next().await {
@@ -297,7 +303,7 @@ fn connect_task_ws(
                     continue;
                 };
 
-                if !project.is_empty() && status.project != project {
+                if !project_for_messages.is_empty() && status.project != project_for_messages {
                     continue;
                 }
 
@@ -332,16 +338,51 @@ fn connect_task_ws(
                     }
                 }
 
-                render_status(id.as_str(), status.href.as_str(), label.as_str());
+                let component_id = BUILD_STATUS_COMPONENT_BY_PROJECT.with(|by_project| {
+                    by_project
+                        .borrow()
+                        .get(project_for_messages.as_str())
+                        .cloned()
+                });
+
+                if let Some(component_id) = component_id {
+                    render_status(component_id.as_str(), status.href.as_str(), label.as_str());
+                }
             }
         };
 
         let _ = Abortable::new(read_messages, abort_registration).await;
+
+        BUILD_STATUS_WS_BY_PROJECT.with(|sockets| {
+            sockets.borrow_mut().remove(project.as_str());
+        });
     });
 }
 
 fn load_latest_build_status(id: String, project: String) {
     if project.is_empty() {
+        return;
+    }
+
+    let cached =
+        BUILD_STATUS_CACHE_BY_PROJECT.with(|cache| cache.borrow().get(project.as_str()).cloned());
+
+    if let Some(cached) = cached {
+        render_status(id.as_str(), cached.href.as_str(), cached.label.as_str());
+        return;
+    }
+
+    let should_fetch = BUILD_STATUS_FETCH_IN_FLIGHT.with(|in_flight| {
+        let mut in_flight = in_flight.borrow_mut();
+        if in_flight.contains(project.as_str()) {
+            false
+        } else {
+            in_flight.insert(project.clone());
+            true
+        }
+    });
+
+    if !should_fetch {
         return;
     }
 
@@ -353,12 +394,41 @@ fn load_latest_build_status(id: String, project: String) {
         let run_all_metadata = fetch_latest_metadata(run_all_endpoint.as_str()).await;
         let latest_metadata = fetch_latest_metadata(endpoint.as_str()).await;
 
-        let Some(metadata) = select_latest_metadata(run_all_metadata, latest_metadata) else {
-            render_status(id.as_str(), "", "");
-            return;
-        };
+        let cached = select_latest_metadata(run_all_metadata, latest_metadata)
+            .map(|metadata| cached_status_from_metadata(project.as_str(), metadata));
 
-        render_status_from_metadata(id.as_str(), project.as_str(), metadata);
+        BUILD_STATUS_FETCH_IN_FLIGHT.with(|in_flight| {
+            in_flight.borrow_mut().remove(project.as_str());
+        });
+
+        if let Some(cached) = cached {
+            BUILD_STATUS_CACHE_BY_PROJECT.with(|cache| {
+                cache.borrow_mut().insert(project.clone(), cached.clone());
+            });
+
+            let component_id = BUILD_STATUS_COMPONENT_BY_PROJECT
+                .with(|by_project| by_project.borrow().get(project.as_str()).cloned());
+
+            if let Some(component_id) = component_id {
+                render_status(
+                    component_id.as_str(),
+                    cached.href.as_str(),
+                    cached.label.as_str(),
+                );
+            }
+            return;
+        }
+
+        BUILD_STATUS_CACHE_BY_PROJECT.with(|cache| {
+            cache.borrow_mut().remove(project.as_str());
+        });
+
+        let component_id = BUILD_STATUS_COMPONENT_BY_PROJECT
+            .with(|by_project| by_project.borrow().get(project.as_str()).cloned());
+
+        if let Some(component_id) = component_id {
+            render_status(component_id.as_str(), "", "");
+        }
     });
 }
 
@@ -426,7 +496,7 @@ async fn fetch_latest_metadata(endpoint: &str) -> Option<LatestLogMetadata> {
     latest.metadata
 }
 
-fn render_status_from_metadata(id: &str, project: &str, metadata: LatestLogMetadata) {
+fn cached_status_from_metadata(project: &str, metadata: LatestLogMetadata) -> CachedBuildStatus {
     let time_value = metadata.finished_at.unwrap_or_default();
     let local_time = if time_value.is_empty() {
         "".to_string()
@@ -463,7 +533,7 @@ fn render_status_from_metadata(id: &str, project: &str, metadata: LatestLogMetad
         format!("/log?project={}", js_sys::encode_uri_component(project))
     };
 
-    render_status(id, href.as_str(), label.as_str());
+    CachedBuildStatus { href, label }
 }
 
 fn normalized_branch(input: &str) -> String {
