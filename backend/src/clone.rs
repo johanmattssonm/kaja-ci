@@ -9,11 +9,6 @@ use actix_web::{HttpResponse, Responder, web};
 use kaja_html_macro::html;
 use serde::Deserialize;
 
-#[path = "../../frontend/src/rest.rs"]
-mod rest;
-
-use rest::BuildCommands;
-
 #[derive(Debug, Deserialize)]
 pub struct CloneParams {
     pub repo: Option<String>,
@@ -103,6 +98,39 @@ pub fn add_existing_project(project_path: &str) -> Result<PathBuf, String> {
     Ok(canonical)
 }
 
+pub fn default_ci_json_value() -> serde_json::Value {
+    serde_json::json!({
+        "tasks": [
+            {
+                "command": "git fetch --all",
+                "task": "git"
+            },
+            {
+                "command": "",
+                "task": "build"
+            },
+            {
+                "command": "",
+                "task": "test"
+            },
+            {
+                "command": "",
+                "task": "release"
+            },
+            {
+                "command": "",
+                "task": "clean"
+            },
+            {
+                "command": "bash",
+                "task": "terminal"
+            }
+        ],
+        "run-all": ["git", "build", "test"],
+        "scheduled-run": []
+    })
+}
+
 pub fn ensure_project_ci_defaults(project_path: &Path) -> Result<(), String> {
     let ci_path = project_path.join("ci.json");
 
@@ -110,7 +138,7 @@ pub fn ensure_project_ci_defaults(project_path: &Path) -> Result<(), String> {
         return Ok(());
     }
 
-    let defaults = BuildCommands::default();
+    let defaults = default_ci_json_value();
     let content = serde_json::to_string_pretty(&defaults)
         .map_err(|err| format!("Failed to serialize default ci.json: {err}"))?;
 
@@ -250,30 +278,39 @@ pub(crate) fn clone_page(params: &CloneParams, compact: bool) -> HttpResponse {
     let mut auto_start = false;
     let repo_input = params.repo.as_ref().or(params.clone_command.as_ref());
 
+    if matches!(
+        params.clone_command.as_ref(),
+        Some(value) if value.trim().is_empty()
+    ) {
+        error_message = "no git clone command provided".to_string();
+    }
+
     if project.is_empty() {
         project = kaja_ci_projects_dir()
             .map(|path| path.to_string_lossy().to_string())
             .unwrap_or_default();
     }
 
-    if let Some(repo_input) = repo_input {
-        match clone_command_from_input(repo_input) {
-            Ok(command) => {
-                clone_command = command;
-                auto_start = true;
-                success_message = "Ready to run clone command".to_string();
+    if error_message.is_empty() {
+        if let Some(repo_input) = repo_input {
+            match clone_command_from_input(repo_input) {
+                Ok(command) => {
+                    clone_command = command;
+                    auto_start = true;
+                    success_message = "Ready to run clone command".to_string();
 
-                if !project.is_empty() {
-                    let project_folder = std::path::Path::new(project.as_str());
-                    if let Ok(target_dir) =
-                        clone_target_dir_from_command(clone_command.as_str(), project_folder)
-                    {
-                        clone_target = target_dir.to_string_lossy().to_string();
+                    if !project.is_empty() {
+                        let project_folder = std::path::Path::new(project.as_str());
+                        if let Ok(target_dir) =
+                            clone_target_dir_from_command(clone_command.as_str(), project_folder)
+                        {
+                            clone_target = target_dir.to_string_lossy().to_string();
+                        }
                     }
                 }
-            }
-            Err(err) => {
-                error_message = err;
+                Err(err) => {
+                    error_message = err;
+                }
             }
         }
     }

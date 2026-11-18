@@ -2,6 +2,7 @@ use std::collections::{HashMap, HashSet};
 use std::fs;
 use std::path::PathBuf;
 
+use crate::clone::default_ci_json_value;
 use crate::runner::ProjectGetParams;
 use crate::taskrunner;
 use actix_web::http::header::ContentType;
@@ -163,7 +164,7 @@ pub async fn load_settings(params: web::Query<ProjectGetParams>) -> impl Respond
             .body(content);
     }
 
-    let defaults = BuildCommands::default();
+    let defaults = default_ci_json_value();
     let content = match serde_json::to_string_pretty(&defaults) {
         Ok(content) => content,
         Err(err) => {

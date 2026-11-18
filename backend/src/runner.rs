@@ -1267,6 +1267,21 @@ async fn process_std_in(action: Action, stdin_state: Arc<Mutex<BuildInputState>>
     }
 }
 
+fn resolve_builtin_action_name(action_name: &str) -> Option<String> {
+    let normalized = action_name.trim().to_ascii_lowercase();
+
+    match normalized.as_str() {
+        "git" | "git fetch" | "git-fetch" => Some("git".to_string()),
+        "clone" => Some("clone".to_string()),
+        "build" => Some("build".to_string()),
+        "test" => Some("test".to_string()),
+        "release" => Some("release".to_string()),
+        "clean" => Some("clean".to_string()),
+        "terminal" => Some("terminal".to_string()),
+        _ => None,
+    }
+}
+
 fn command_to_executable(action: &Action) -> Option<CommandBuilder> {
     let folder = action.folder.as_deref()?;
 
@@ -1285,8 +1300,11 @@ fn command_to_executable(action: &Action) -> Option<CommandBuilder> {
         }
     };
 
+    let resolved_action = resolve_builtin_action_name(action.action.as_str())
+        .unwrap_or_else(|| action.action.trim().to_ascii_lowercase());
+
     if let Ok(config_json) = serde_json::from_str::<serde_json::Value>(&config_string)
-        && let Some(command) = find_task_command_in_json(&config_json, action.action.as_str())
+        && let Some(command) = find_task_command_in_json(&config_json, resolved_action.as_str())
     {
         return parse_command(Some(command), folder).ok();
     }
@@ -1299,7 +1317,7 @@ fn command_to_executable(action: &Action) -> Option<CommandBuilder> {
         }
     };
 
-    match action.action.as_str() {
+    match resolved_action.as_str() {
         "build" => parse_command(config_commands.build.clone(), folder).ok(),
         "clone" => parse_command(config_commands.clone, folder).ok(),
         "git" => parse_command(config_commands.git, folder).ok(),
@@ -1314,7 +1332,7 @@ fn command_to_executable(action: &Action) -> Option<CommandBuilder> {
 
 fn find_task_command_in_json(config_json: &serde_json::Value, task_name: &str) -> Option<String> {
     let tasks = config_json.get("tasks")?.as_array()?;
-    let task_name = task_name.trim();
+    let task_name = task_name.trim().to_ascii_lowercase();
 
     tasks.iter().find_map(|value| {
         let map = value.as_object()?;
@@ -1325,7 +1343,8 @@ fn find_task_command_in_json(config_json: &serde_json::Value, task_name: &str) -
             .or_else(|| map.get("name").and_then(|value| value.as_str()))
             .or_else(|| map.get("key").and_then(|value| value.as_str()))
             .or_else(|| map.get("action").and_then(|value| value.as_str()))?
-            .trim();
+            .trim()
+            .to_ascii_lowercase();
 
         if task != task_name {
             return None;
@@ -1556,6 +1575,14 @@ async fn start_detached_action(
 ) -> Result<String, RunTaskError> {
     if !folder_exists(project_folder.as_str()) {
         return Err(RunTaskError::InvalidProjectFolder);
+    }
+
+    if action_name == "clone"
+        && command
+            .as_deref()
+            .is_none_or(|value| value.trim().is_empty())
+    {
+        return Err(RunTaskError::NoCommandConfigured(action_name.to_string()));
     }
 
     let requested_task_key = build_detached_task_key(action_name, project_folder.as_str());

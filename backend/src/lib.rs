@@ -10,14 +10,14 @@ mod addproject;
 mod app;
 mod auth;
 mod branch;
-mod build;
+
 mod clean;
 mod clone;
 mod custom;
-mod fetch;
+
 mod index;
 mod logs;
-mod release;
+
 mod run;
 mod runner;
 mod settings;
@@ -25,7 +25,6 @@ mod settingsfile;
 mod status;
 mod taskrunner;
 mod terminal;
-mod test;
 
 fn frontend_pkg_dir() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../frontend/pkg")
@@ -64,14 +63,10 @@ pub async fn run_server(session_key: String) -> io::Result<()> {
             .service(clone::clone_handler)
             .service(clone::compact_clone_handler)
             .service(branch::branch)
-            .service(build::build)
-            .service(fetch::fetch)
             .service(settings::settings_page)
             .service(settings::save_settings)
             .service(settings::load_settings)
             .service(abort::abort)
-            .service(test::test)
-            .service(release::release)
             .service(clean::clean)
             .service(terminal::terminal)
             .service(run::run)

@@ -8,11 +8,17 @@ mod color;
 mod consolecompoent;
 mod projectstatus;
 mod settings;
+mod tauri;
 
 pub mod rest;
 
 #[callback("browseProjectFolder")]
 fn browse_project_folder() {
+    if !crate::tauri::is_available() {
+        set_project_folder_error("Folder picker is only available in the Tauri desktop app.");
+        return;
+    }
+
     spawn_local(async {
         match tauri_wasm::invoke("pick_project_folder").await {
             Ok(value) => match serde_wasm_bindgen::from_value::<Option<String>>(value) {

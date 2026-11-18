@@ -109,6 +109,10 @@ impl Component for ConsoleComponent {
             return;
         }
 
+        if action == "clone" && command.trim().is_empty() {
+            return;
+        }
+
         spawn_local(async move {
             ensure_builder_task_connected(action.as_str(), project.as_str()).await;
         });
@@ -565,11 +569,6 @@ fn task_href(task_key: &str, project: &str) -> String {
         .unwrap_or(task_key);
 
     match action {
-        "git" | "fetch" => format!("/fetch?project={project}"),
-        "build" => format!("/build?project={project}"),
-        "clone" => format!("/clone?project={project}"),
-        "test" => format!("/test?project={project}"),
-        "release" => format!("/release?project={project}"),
         "clean" => format!("/clean?project={project}"),
         "terminal" => format!("/terminal?project={project}"),
         custom => format!("/custom?project={project}&custom_label={custom}"),

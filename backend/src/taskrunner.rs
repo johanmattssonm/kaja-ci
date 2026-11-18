@@ -646,11 +646,6 @@ fn load_task_keys(project: &str) -> Vec<String> {
 
 fn task_href(action: &str, project: &str) -> String {
     match action {
-        "git" | "fetch" => format!("/fetch?project={project}"),
-        "build" => format!("/build?project={project}"),
-        "clone" => format!("/clone?project={project}"),
-        "test" => format!("/test?project={project}"),
-        "release" => format!("/release?project={project}"),
         "clean" => format!("/clean?project={project}"),
         "terminal" => format!("/terminal?project={project}"),
         "run-all" => format!("/log?project={project}&action=run-all"),

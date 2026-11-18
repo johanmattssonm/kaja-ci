@@ -279,29 +279,10 @@ impl ProjectStatusComponent {
                 <rust>
                     for task in ordered_tasks.iter() {
                         let task_label = task.0.as_str();
-                        let task_key = task.1.trim().to_ascii_lowercase();
+                        let task_action = task.1.trim();
+                        let task_key = task_action.to_ascii_lowercase();
 
                         match task_key.as_str() {
-                            "git" => {
-                                <markup>
-                                    <button class="project-action-button" onclick="goTo('/fetch?project=$project')">Git Fetch</button>
-                                </markup>
-                            }
-                            "build" => {
-                                <markup>
-                                    <button class="project-action-button" onclick="goTo('/build?project=$project')">Build</button>
-                                </markup>
-                            }
-                            "test" => {
-                                <markup>
-                                    <button class="project-action-button" onclick="goTo('/test?project=$project')">Test</button>
-                                </markup>
-                            }
-                            "release" => {
-                                <markup>
-                                    <button class="project-action-button" onclick="goTo('/release?project=$project')">Release</button>
-                                </markup>
-                            }
                             "clean" => {
                                 <markup>
                                     <button class="project-action-button" onclick="goTo('/clean?project=$project')">Clean</button>
@@ -312,17 +293,12 @@ impl ProjectStatusComponent {
                                     <button class="project-action-button" onclick="goTo('/terminal?project=$project')">Terminal</button>
                                 </markup>
                             }
-                            "clone" => {
-                                <markup>
-                                    <button class="project-action-button" onclick="goTo('/clone?project=$project')">Clone</button>
-                                </markup>
-                            }
                             _ => {
                                 let custom_label = task_label.trim();
 
                                 if !custom_label.is_empty() {
                                     <markup>
-                                        <button class="project-action-button" onclick="goTo('/custom?project=$(project)&custom_label=$custom_label')">$custom_label</button>
+                                        <button class="project-action-button" onclick="goTo('/custom?project=$(project)&custom_label=$(task_action)')">$custom_label</button>
                                     </markup>
                                 }
                             }
