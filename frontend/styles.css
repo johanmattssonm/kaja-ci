@@ -361,6 +361,7 @@ tbody tr:last-child td {
 .terminal-output {
     height: 450px;
     width: 1159px;
+    max-width: 100%;
     margin: 12px auto;
 }
 

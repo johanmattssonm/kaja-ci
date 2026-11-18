@@ -1196,9 +1196,6 @@ async fn process_ws_message(
     session: &mut Session,
     stdin_state: Arc<Mutex<BuildInputState>>,
 ) {
-    #[cfg(debug_assertions)]
-    println!("WS: {}", text); // don't print in release mode to protect pin, password etc.
-
     let action = serde_json::from_str(text.as_str());
 
     if action.is_err() {

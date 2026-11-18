@@ -314,9 +314,9 @@ fn history_pagination_controls(
                 </rust>
                 <rust>
                     if let Some(href) = next_href.as_deref() {
-                        <markup><a class="top-bar-link" href="$(href)">Next</a></markup>
+                        <markup>&nbsp;<a class="top-bar-link" href="$(href)">Next</a></markup>
                     } else {
-                        <markup><span>Next</span></markup>
+                        <markup>&nbsp;<span>Next</span></markup>
                     }
                 </rust>
             </div>
