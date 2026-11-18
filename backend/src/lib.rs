@@ -1,11 +1,14 @@
 use actix_files as fs;
-use actix_web::{App, HttpServer, web};
+use actix_web::dev::Service;
+use actix_web::{App, HttpResponse, HttpServer, web};
+use futures_util::future::{Either, ready};
 use std::io;
 use std::path::PathBuf;
 
 mod abort;
 mod addproject;
 mod app;
+mod auth;
 mod branch;
 mod build;
 mod clean;
@@ -28,7 +31,7 @@ fn frontend_pkg_dir() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../frontend/pkg")
 }
 
-pub async fn run_server() -> io::Result<()> {
+pub async fn run_server(session_key: String) -> io::Result<()> {
     settingsfile::ensure_kaja_ci_dirs_exist().map_err(io::Error::other)?;
     app::ensure_log_base_dir_exists()?;
     taskrunner::start_scheduler();
@@ -38,9 +41,23 @@ pub async fn run_server() -> io::Result<()> {
     println!("Frontend: http://127.0.0.1:2003/");
 
     let pkg_dir = frontend_pkg_dir();
+    let auth_state = web::Data::new(auth::AppAuth::new(session_key));
 
     HttpServer::new(move || {
         App::new()
+            .app_data(auth_state.clone())
+            .wrap_fn(|req, srv| {
+                let path = req.path().to_string();
+                let public_path = path == "/" || path.starts_with("/pkg/") || path == "/pkg";
+
+                if public_path || auth::is_authorized(req.request()) {
+                    Either::Left(srv.call(req))
+                } else {
+                    Either::Right(ready(Ok(
+                        req.into_response(HttpResponse::Unauthorized().body("Unauthorized"))
+                    )))
+                }
+            })
             .service(fs::Files::new("/pkg", pkg_dir.clone()))
             .service(index::index)
             .service(addproject::add_project)

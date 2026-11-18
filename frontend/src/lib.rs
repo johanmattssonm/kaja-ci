@@ -2,6 +2,7 @@ use kaja_web::prelude::*;
 use wasm_bindgen::JsCast;
 use wasm_bindgen_futures::spawn_local;
 
+mod auth;
 mod buildstatus;
 mod color;
 mod consolecompoent;
@@ -81,5 +82,10 @@ fn clear_project_folder_error() {
 pub fn init() {
     std::panic::set_hook(Box::new(console_error_panic_hook::hook));
     console_error_panic_hook::set_once();
+
+    spawn_local(async {
+        let _ = crate::auth::session_key().await;
+    });
+
     init_callbacks();
 }

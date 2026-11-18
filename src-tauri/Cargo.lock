@@ -2377,6 +2377,7 @@ dependencies = [
  "actix-web",
  "actix-ws",
  "chrono",
+ "futures-util",
  "git2",
  "kaja-html-macro",
  "portable-pty",

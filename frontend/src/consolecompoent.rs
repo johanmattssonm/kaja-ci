@@ -1,12 +1,12 @@
-use crate::rest::{Action, ActionResponse};
+use crate::{
+    auth,
+    rest::{Action, ActionResponse},
+};
 
 use super::color;
 use futures_channel::mpsc;
 use futures_util::{SinkExt, StreamExt};
-use gloo_net::{
-    http::Request,
-    websocket::{Message, futures::WebSocket},
-};
+use gloo_net::websocket::{Message, futures::WebSocket};
 use kaja_web::prelude::*;
 use serde::Deserialize;
 use std::path::Path;
@@ -316,7 +316,7 @@ fn load_latest_raw_log(component_id: String, project: String, file: String, log_
             return;
         };
 
-        let response = match Request::get(endpoint.as_str()).send().await {
+        let response = match auth::get(endpoint.as_str()).await {
             Ok(response) => response,
             Err(_) => {
                 try_inner_text("#status", "Failed to load log output.");
@@ -383,6 +383,7 @@ fn abort_task_with_beacon(task_key: Option<&str>, project: Option<&str>) -> bool
     let Some(endpoint) = abort_endpoint(task_key, project) else {
         return false;
     };
+    let endpoint = auth::with_cached_key(endpoint.as_str());
 
     let Some(window) = web_sys::window() else {
         return false;
@@ -439,7 +440,7 @@ async fn abort_task(task_key: Option<&str>, project: Option<&str>) -> bool {
         return false;
     };
 
-    match Request::post(endpoint.as_str()).send().await {
+    match auth::post(endpoint.as_str()).await {
         Ok(response) => response.ok(),
         Err(_) => false,
     }
@@ -495,7 +496,7 @@ async fn start_task(project: &str, action: &str, command: Option<&str>) -> Optio
         endpoint.push_str(url_encode(command).as_str());
     }
 
-    let response = match Request::get(endpoint.as_str()).send().await {
+    let response = match auth::get(endpoint.as_str()).await {
         Ok(response) => response,
         Err(err) => {
             log!("Failed to start task", format!("{err:?}"));
@@ -747,7 +748,7 @@ struct LatestLogResponse {
 }
 
 async fn fetch_running_builder_task_key(action: &str, project: &str) -> Option<String> {
-    let response = Request::get("/status").send().await.ok()?;
+    let response = auth::get("/status").await.ok()?;
     let body = response.text().await.ok()?;
     let status: StatusResponse = serde_json::from_str(body.as_str()).ok()?;
 
@@ -823,7 +824,7 @@ async fn show_latest_history_for_action(action: &str, project: &str, component_i
         url_encode(action)
     );
 
-    let response = match Request::get(endpoint.as_str()).send().await {
+    let response = match auth::get(endpoint.as_str()).await {
         Ok(response) => response,
         Err(_) => return false,
     };
@@ -913,7 +914,10 @@ fn is_active_console_connection(component_id: &str, task_key: &str, connection_i
 }
 
 async fn connect_console_view(id: String, task_key: String, connection_id: String) {
-    let ws = WebSocket::open("ws://127.0.0.1:2003/runner");
+    let endpoint = auth::with_key("ws://127.0.0.1:2003/runner")
+        .await
+        .unwrap_or_else(|| "ws://127.0.0.1:2003/runner".to_string());
+    let ws = WebSocket::open(endpoint.as_str());
 
     if ws.is_err() {
         log!("Failed to open websocket");

@@ -1,11 +1,9 @@
+use crate::auth;
 use futures_util::{
     StreamExt,
     future::{AbortHandle, Abortable},
 };
-use gloo_net::{
-    http::Request,
-    websocket::{Message, futures::WebSocket},
-};
+use gloo_net::websocket::{Message, futures::WebSocket};
 use js_sys::Date;
 use kaja_web::prelude::*;
 use serde::Deserialize;
@@ -276,6 +274,8 @@ fn connect_task_ws(
             js_sys::encode_uri_component(project.as_str())
         );
 
+        let endpoint = auth::with_key(endpoint.as_str()).await.unwrap_or(endpoint);
+
         let ws = WebSocket::open(endpoint.as_str());
 
         let Ok(ws) = ws else {
@@ -407,7 +407,7 @@ fn metadata_time_ms(metadata: &LatestLogMetadata) -> f64 {
 }
 
 async fn fetch_latest_metadata(endpoint: &str) -> Option<LatestLogMetadata> {
-    let Ok(response) = Request::get(endpoint).send().await else {
+    let Ok(response) = auth::get(endpoint).await else {
         return None;
     };
 

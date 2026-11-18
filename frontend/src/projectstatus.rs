@@ -1,7 +1,6 @@
+use crate::auth;
 use crate::buildstatus::render_build_status_error;
 use crate::rest::{BuildCommands, CustomCommand};
-
-use gloo_net::http::Request;
 use kaja_web::prelude::*;
 use serde::Deserialize;
 use serde_json::Value;
@@ -347,6 +346,7 @@ fn go_to(url: String) {
         return;
     };
 
+    let url = auth::with_cached_key(url.as_str());
     let _ = window.location().set_href(url.as_str());
 }
 
@@ -360,7 +360,7 @@ struct RunAllResponse {
 async fn run_all(project: String) {
     let endpoint = format!("/run-all?project={}", project);
 
-    let response = match Request::get(endpoint.as_str()).send().await {
+    let response = match auth::get(endpoint.as_str()).await {
         Ok(response) => response,
         Err(_) => {
             render_build_status_error(project.as_str(), "Failed to run all tasks.");
@@ -413,7 +413,7 @@ struct BranchResponse {
 async fn load_settings(project: &str) -> Option<BuildCommands> {
     let endpoint = format!("/load-settings?project={}", project);
 
-    let response = match Request::get(endpoint.as_str()).send().await {
+    let response = match auth::get(endpoint.as_str()).await {
         Ok(response) => response,
         Err(_) => {
             log!("Failed to load settings.");
@@ -441,7 +441,7 @@ async fn load_settings(project: &str) -> Option<BuildCommands> {
 async fn load_branch(project: &str) -> String {
     let endpoint = format!("/branch?project={}", project);
 
-    let response = match Request::get(endpoint.as_str()).send().await {
+    let response = match auth::get(endpoint.as_str()).await {
         Ok(response) => response,
         Err(_) => {
             log!("Failed to load branch.");
