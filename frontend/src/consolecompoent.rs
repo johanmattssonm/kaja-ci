@@ -40,6 +40,15 @@ struct Console {
     command: String,
 
     #[attribute]
+    branch: String,
+
+    #[attribute]
+    latest_commit: String,
+
+    #[attribute]
+    latest_built_commit: String,
+
+    #[attribute]
     clone_target: String,
 
     #[attribute]
@@ -224,6 +233,11 @@ impl ConsoleComponent {
         let action: String = self.get_attribute("action").unwrap_or_default();
         let task_key: String = self.get_attribute("task_key").unwrap_or_default();
         let has_connected: bool = self.get_attribute("has_connected").unwrap_or(false);
+        let branch: String = self.get_attribute("branch").unwrap_or_default();
+        let latest_commit: String = self.get_attribute("latest_commit").unwrap_or_default();
+        let latest_built_commit: String = self
+            .get_attribute("latest_built_commit")
+            .unwrap_or_default();
 
         let show_connect_button = action == "terminal" && task_key.is_empty() && !has_connected;
         let preserve_previous_output = action == "terminal" && has_connected;
@@ -249,7 +263,20 @@ impl ConsoleComponent {
 
         let content = html! {{
             <h1 id="status">$(initial_status)</h1>
-            <p>Project Folder: $(project)</p>
+            <p>Project Folder: $(project) $(branch)</p>
+            <rust>
+                if !latest_commit.trim().is_empty() {
+                    <markup>
+                        <p>Latest Commit: $(latest_commit)</p>
+                    </markup>
+                }
+
+                if !latest_built_commit.trim().is_empty() {
+                    <markup>
+                        <p>Latest Built Commit: $(latest_built_commit)</p>
+                    </markup>
+                }
+            </rust>
             <p>Task: $(action)</p>
             <pre id="$(id)-output" class="$(output_class)" tabindex="0">
                 <rust>
@@ -735,8 +762,9 @@ struct StatusResponse {
 
 #[derive(Deserialize)]
 struct LatestLogMetadata {
-    action: String,
     raw_file: String,
+    #[serde(default)]
+    latest_built_commit: String,
 }
 
 #[derive(Deserialize)]
@@ -817,34 +845,19 @@ fn raw_file_name(raw_file: &str) -> Option<String> {
 }
 
 async fn show_latest_history_for_action(action: &str, project: &str, component_id: &str) -> bool {
-    let endpoint = format!(
-        "/log/latest?project={}&action={}",
-        url_encode(project),
-        url_encode(action)
-    );
-
-    let response = match auth::get(endpoint.as_str()).await {
-        Ok(response) => response,
-        Err(_) => return false,
+    let payload = match fetch_latest_log_response(action, project).await {
+        Some(payload) => payload,
+        None => return false,
     };
-
-    let body = match response.text().await {
-        Ok(body) => body,
-        Err(_) => return false,
-    };
-
-    let payload = match serde_json::from_str::<LatestLogResponse>(body.as_str()) {
-        Ok(payload) => payload,
-        Err(_) => return false,
-    };
-
-    if !payload.ok || !payload.found {
-        return false;
-    }
 
     let Some(metadata) = payload.metadata else {
         return false;
     };
+
+    if let Some(component) = get_element_by_id(component_id) {
+        let _ =
+            component.set_attribute("latest_built_commit", metadata.latest_built_commit.as_str());
+    }
 
     let Some(raw_name) = raw_file_name(metadata.raw_file.as_str()) else {
         return false;
@@ -857,6 +870,51 @@ async fn show_latest_history_for_action(action: &str, project: &str, component_i
         action.to_string(),
     );
     true
+}
+
+async fn fetch_latest_log_response(action: &str, project: &str) -> Option<LatestLogResponse> {
+    let endpoint = format!(
+        "/log/latest?project={}&action={}",
+        url_encode(project),
+        url_encode(action)
+    );
+
+    let response = auth::get(endpoint.as_str()).await.ok()?;
+    let body = response.text().await.ok()?;
+    let payload = serde_json::from_str::<LatestLogResponse>(body.as_str()).ok()?;
+
+    if !payload.ok || !payload.found {
+        return None;
+    }
+
+    Some(payload)
+}
+
+async fn refresh_latest_built_commit(component_id: String) {
+    let Some(component) = get_element_by_id(component_id.as_str()) else {
+        return;
+    };
+
+    let action = component.get_attribute("action").unwrap_or_default();
+    let project = component.get_attribute("project").unwrap_or_default();
+
+    if action.trim().is_empty()
+        || project.trim().is_empty()
+        || action == "terminal"
+        || action == "log"
+    {
+        return;
+    }
+
+    let Some(payload) = fetch_latest_log_response(action.as_str(), project.as_str()).await else {
+        return;
+    };
+
+    let Some(metadata) = payload.metadata else {
+        return;
+    };
+
+    let _ = component.set_attribute("latest_built_commit", metadata.latest_built_commit.as_str());
 }
 
 async fn start_and_connect_console_view(action: &str, project: &str) {
@@ -1318,10 +1376,20 @@ fn handle_status(component_id: &str, line: ActionResponse) {
         "status: FAILED" => {
             try_inner_text("#status", "Task: Failed");
             let _ = component.set_attribute("task_exited", "true");
+
+            let refresh_component_id = component_id.to_string();
+            spawn_local(async move {
+                refresh_latest_built_commit(refresh_component_id).await;
+            });
         }
         "status: SUCCESS" => {
             try_inner_text("#status", "Task Finished Successfully");
             let _ = component.set_attribute("task_exited", "true");
+
+            let refresh_component_id = component_id.to_string();
+            spawn_local(async move {
+                refresh_latest_built_commit(refresh_component_id).await;
+            });
 
             let action = component.get_attribute("action").unwrap_or_default();
             if action == "clone" {

@@ -9,7 +9,7 @@ use std::sync::LazyLock;
 use std::sync::{Arc, RwLock as StdRwLock};
 use tokio::sync::{RwLock, broadcast, mpsc};
 
-use crate::branch::current_branch_or_label;
+use crate::branch::{current_branch_or_label, latest_commit_or_empty};
 use crate::taskrunner::send_task_status;
 
 // The app can have one builder running and many terminals attached.
@@ -56,6 +56,8 @@ pub struct TaskHistoryMetadata {
     pub raw_file: String,
     #[serde(default)]
     pub branch: String,
+    #[serde(default)]
+    pub latest_built_commit: String,
 }
 
 #[derive(Clone, Debug)]
@@ -67,6 +69,7 @@ pub struct TaskHistoryFiles {
     pub action: String,
     pub started_at: String,
     pub branch: String,
+    pub latest_built_commit: String,
 }
 
 impl AppData {
@@ -189,6 +192,7 @@ impl AppData {
                     finished_at: None,
                     raw_file: files.raw_path.to_string_lossy().to_string(),
                     branch: files.branch.clone(),
+                    latest_built_commit: files.latest_built_commit.clone(),
                 },
             );
         }
@@ -447,6 +451,7 @@ fn create_history_files(
         action: action.to_string(),
         started_at,
         branch: current_branch_or_label(project),
+        latest_built_commit: latest_commit_or_empty(project),
     };
 
     let metadata = TaskHistoryMetadata {
@@ -459,6 +464,7 @@ fn create_history_files(
         finished_at: None,
         raw_file: files.raw_path.to_string_lossy().to_string(),
         branch: files.branch.clone(),
+        latest_built_commit: files.latest_built_commit.clone(),
     };
 
     write_metadata(files.meta_path.as_path(), &metadata);
@@ -521,6 +527,7 @@ fn write_task_history_completion(
         finished_at: Some(Local::now().to_rfc3339_opts(SecondsFormat::Secs, false)),
         raw_file: files.raw_path.to_string_lossy().to_string(),
         branch: files.branch.clone(),
+        latest_built_commit: files.latest_built_commit.clone(),
     };
 
     write_metadata(files.meta_path.as_path(), &metadata);

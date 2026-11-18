@@ -40,6 +40,33 @@ pub fn current_branch_or_label(project_path: &str) -> String {
     current_branch(project_path).unwrap_or_else(|_| NO_GIT_BRANCH_LABEL.to_string())
 }
 
+pub fn latest_commit_or_empty(project_path: &str) -> String {
+    let project_path = project_path.trim();
+
+    if project_path.is_empty() {
+        return String::new();
+    }
+
+    let Ok(repo) = Repository::discover(project_path) else {
+        return String::new();
+    };
+
+    repo.head()
+        .ok()
+        .and_then(|head| head.peel_to_commit().ok())
+        .map(|commit| {
+            let short_id = commit
+                .as_object()
+                .short_id()
+                .ok()
+                .and_then(|buffer| buffer.as_str().map(|value| value.to_string()))
+                .unwrap_or_else(|| commit.id().to_string()[..7].to_string());
+            let summary = commit.summary().unwrap_or("(no summary)");
+            format!("{} {}", short_id, summary)
+        })
+        .unwrap_or_default()
+}
+
 pub fn current_branch(project_path: &str) -> Result<String, String> {
     let project_path = project_path.trim();
 

@@ -12,7 +12,7 @@ use std::sync::{Mutex, Once, OnceLock, RwLock as StdRwLock};
 use tokio::sync::broadcast;
 
 use crate::app::{TaskHistoryMetadata, log_base_dir};
-use crate::branch::current_branch_or_label;
+use crate::branch::{current_branch_or_label, latest_commit_or_empty};
 use crate::clone;
 use crate::runner::{RunTaskError, start_run_task};
 
@@ -727,6 +727,7 @@ struct RunAllHistory {
     project: String,
     started_at: String,
     branch: String,
+    latest_built_commit: String,
     raw_path: PathBuf,
     meta_path: PathBuf,
 }
@@ -754,6 +755,7 @@ fn create_run_all_history(project: &str) -> Option<RunAllHistory> {
         project: project.to_string(),
         started_at,
         branch,
+        latest_built_commit: latest_commit_or_empty(project),
         raw_path,
         meta_path,
     };
@@ -801,6 +803,7 @@ impl RunAllHistory {
             finished_at,
             raw_file: self.raw_path.to_string_lossy().to_string(),
             branch: self.branch.clone(),
+            latest_built_commit: self.latest_built_commit.clone(),
         }
     }
 }
